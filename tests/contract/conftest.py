@@ -1,5 +1,6 @@
 """Runs every contract test once for each kind of model client and of store."""
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,10 @@ def clock() -> FakeClock:
 
 
 @pytest.fixture(params=list(STORE_KINDS.values()), ids=list(STORE_KINDS))
-def stores(request: pytest.FixtureRequest, tmp_path: Path, clock: FakeClock) -> Stores:
+def stores(
+    request: pytest.FixtureRequest, tmp_path: Path, clock: FakeClock
+) -> Iterator[Stores]:
     store_kind: StoreKind = request.param
-    return store_kind.make(tmp_path, clock)
+    made = store_kind.make(tmp_path, clock)
+    yield made
+    made.close()
