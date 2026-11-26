@@ -3,6 +3,7 @@
 from lamplighter.adapters.counting_ids import CountingIds
 from lamplighter.adapters.file_blob_store import BlobTotals, FileBlobStore
 from lamplighter.adapters.recorded_model import RecordingModel, ReplayedModel
+from lamplighter.adapters.scripted_channel import ScriptedChannel
 from lamplighter.adapters.scripted_model import (
     ScriptedBreak,
     ScriptedModel,
@@ -19,6 +20,7 @@ from lamplighter.adapters.system_ids import SystemIds
 
 __all__ = [
     "CountingIds",
+    "ScriptedChannel",
     "ScriptedTool",
     "ScriptedTools",
     "StubTools",

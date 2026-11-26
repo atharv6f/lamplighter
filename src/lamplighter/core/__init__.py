@@ -1,7 +1,9 @@
 """The agent's own logic. Imports ports, never adapters."""
 
 from lamplighter.core import harness_texts
+from lamplighter.core.chat_session import Wake, drive
 from lamplighter.core.cost import Prices, cost_micro_dollars
+from lamplighter.core.delivery import deliver_due
 from lamplighter.core.event_types import (
     CANCELLED,
     LIMIT_HIT,
@@ -12,6 +14,7 @@ from lamplighter.core.event_types import (
     TOOL_INTENT,
     TOOL_RESULT,
 )
+from lamplighter.core.intake import run_intake, take
 from lamplighter.core.observers import (
     ModelCallEnded,
     ModelCallStarted,
@@ -48,12 +51,17 @@ __all__ = [
     "ToolCallEnded",
     "ToolCallStarted",
     "TurnEnd",
+    "Wake",
     "UnfinishedSession",
     "UnfinishedWork",
     "cost_micro_dollars",
+    "deliver_due",
+    "drive",
     "fold_reply",
     "harness_texts",
     "rebuild_messages",
+    "run_intake",
     "run_turn",
+    "take",
     "unfinished_work",
 ]

@@ -2,6 +2,7 @@
 
 from lamplighter.ports.blob_check import blob_damage, check_handle, check_put
 from lamplighter.ports.blob_store import BlobHandle, BlobStore
+from lamplighter.ports.channel import Channel
 from lamplighter.ports.clock import Clock, utc_text
 from lamplighter.ports.derived_ids import (
     effect_key,
@@ -100,6 +101,7 @@ __all__ = [
     "ToolProvider",
     "Outbound",
     "DeliveryReceipt",
+    "Channel",
     "IdSource",
     "Accepted",
     "Action",
