@@ -20,5 +20,10 @@ build/
 *.sqlite3
 traces/
 
+# Private notes and personal Claude settings stay on the Mac
+context/
+CLAUDE.local.md
+.claude/settings.local.json
+
 # macOS
 .DS_Store
