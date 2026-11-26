@@ -6,6 +6,8 @@ from typing import Any, cast
 
 from lamplighter.core.cost import cost_micro_dollars
 from lamplighter.core.event_types import MODEL_REQUEST, MODEL_RESPONSE
+from lamplighter.core.harness_texts import MODEL_OUT_OF_TIME
+from lamplighter.core.interruptible import CutShort, Finished, NotStarted, interruptible
 from lamplighter.core.limits import time_left_ms
 from lamplighter.core.reply import Reply, fold_reply
 from lamplighter.core.run_deps import Deps
@@ -14,6 +16,7 @@ from lamplighter.core.run_spec import RunSpec
 from lamplighter.core.run_view import RunView
 from lamplighter.core.transcript import rebuild_messages
 from lamplighter.ports import (
+    ErrorEvent,
     Event,
     Failure,
     JsonObject,
@@ -24,6 +27,16 @@ from lamplighter.ports import (
     event_id_for,
     to_plain,
     utc_text,
+)
+
+_SOURCE = "run_turn"
+
+_OUT_OF_TIME = ErrorEvent(
+    failure=Failure(
+        kind="timeout", effect="none", message=MODEL_OUT_OF_TIME, source=_SOURCE
+    ),
+    model_reported=None,
+    skipped=0,
 )
 
 
@@ -40,7 +53,9 @@ async def call_model(
     The request is saved first, so a call lost to a kill still counts as a
     step. Its deadline is the smaller of the setting and the time the run
     has left, which is at least 1 ms because the time limit is checked
-    before this move is picked.
+    before this move is picked. A stop cuts the call short and nothing more
+    is saved. A call still running one cancel bound after its deadline is
+    cut, and saved as a `timeout` failure with what had arrived.
     """
     messages = rebuild_messages(events)
     if isinstance(messages, Failure):
@@ -63,9 +78,26 @@ async def call_model(
         deadline_ms=deadline_ms,
         retries=spec.model_retries,
     )
+    got: list[ModelEvent] = []
     start = deps.clock.monotonic()
-    reply = fold_reply(await _read_stream(deps.model, request))
+    raced = await interruptible(
+        _read_stream(deps.model, request, got),
+        deps.running.signal_for(session_id),
+        deps.clock,
+        # The adapter keeps the deadline itself. This is the backstop behind
+        # it, so no rule of the loop rests on an adapter behaving well.
+        allowance_s=(deadline_ms + spec.cancel_bound_ms) / 1000,
+        bound_s=spec.cancel_bound_ms / 1000,
+    )
     duration_ms = elapsed_ms(start, deps.clock.monotonic())
+    match raced:
+        case NotStarted() | CutShort(reason="stop"):
+            # Nothing more is saved. The request stays, and counts as a step.
+            return None
+        case CutShort():
+            reply = fold_reply([*got, _OUT_OF_TIME])
+        case Finished():
+            reply = fold_reply(got)
     response = in_run(
         asked,
         utc_text(deps.clock.now()),
@@ -78,13 +110,15 @@ async def call_model(
     return saved if isinstance(saved, Failure) else None
 
 
-async def _read_stream(model: ModelClient, request: ModelRequest) -> list[ModelEvent]:
-    """Read the whole reply stream. Closing it, also on a cancel, ends the call."""
-    got: list[ModelEvent] = []
+async def _read_stream(
+    model: ModelClient, request: ModelRequest, got: list[ModelEvent]
+) -> None:
+    # The events are kept outside the task, so the part of a reply that
+    # arrived before a cut is not lost. Closing the stream, which a cancel
+    # does here, ends the call.
     async with aclosing(model.stream(request)) as stream:
         async for event in stream:
             got.append(event)
-    return got
 
 
 def _reply_payload(reply: Reply, spec: RunSpec) -> JsonObject:

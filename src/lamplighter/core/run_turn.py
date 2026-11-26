@@ -28,6 +28,8 @@ from lamplighter.core.run_view import RunView, view_of
 from lamplighter.core.tool_step import answer_call, run_call
 from lamplighter.ports import Event, Failure, ToolSpec
 
+_SOURCE = "run_turn"
+
 
 async def run_turn(
     session_id: str, spec: RunSpec, deps: Deps
@@ -46,13 +48,34 @@ async def run_turn(
       had started is never run again, and no message is lost or saved twice.
     - The same saved events, inbox rows, model replies, clock and ids give
       the same events, byte for byte.
+    - A second call for a session this process is already running returns
+      `conflict` and writes nothing.
     - A run uses one config id from its start to its end.
     - An exception out of it is a bug.
     """
+    if not deps.running.begin(session_id):
+        return Failure(
+            kind="conflict",
+            effect="none",
+            message=f"Session {session_id} is already being run.",
+            source=_SOURCE,
+        )
+    try:
+        return await _passes(session_id, spec, deps)
+    finally:
+        deps.running.end(session_id)
+
+
+async def _passes(
+    session_id: str, spec: RunSpec, deps: Deps
+) -> TurnEnd | Failure | None:
     tools = deps.tools.list_tools()
     tool_names = frozenset(tool.name for tool in tools)
     events: list[Event] = []
     while True:
+        # Cleared before the inbox is read: a stop saved before this finds
+        # its row in the read, and one saved after sets the flag again.
+        deps.running.clear_stop(session_id)
         known = events[-1].seq if events else 0
         new = await deps.log.read(session_id, known)
         if isinstance(new, Failure):
@@ -102,7 +125,7 @@ async def _carry_out(
         case CallModel():
             return await call_model(session_id, view, events, tools, spec, deps)
         case RunCall():
-            return await run_call(session_id, view, move.call, deps)
+            return await run_call(session_id, view, move.call, spec, deps)
         case AnswerCall():
             return await answer_call(
                 session_id, view, move.call, move.harness, tools, deps

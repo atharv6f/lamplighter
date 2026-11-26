@@ -42,11 +42,11 @@ from lamplighter.ports import (
     out_id_for,
     to_plain,
 )
-from tests.fake_clock import FakeClock
 from tests.loop_kit import MAX_RECORD_BYTES, Loop, in_memory
 from tests.model_by_request import ModelByRequest, assistant_turns
 from tests.model_samples import PROFILE
 from tests.run_history import CONFIG, SESSION, SPEC, inbound, stop
+from tests.waiting_clock import JumpingClock
 
 QUESTION = "What time is it, and can you wait two seconds?"
 ANSWER = "It is 07:35 UTC, and I waited two seconds."
@@ -200,7 +200,7 @@ def test_the_model_sees_each_result_and_the_tool_list() -> None:
 
 def test_the_deadline_is_the_time_the_run_has_left_when_that_is_less() -> None:
     async def scenario() -> None:
-        clock = FakeClock()
+        clock = JumpingClock()
         model = ModelByRequest(three_steps, clock, seconds=100.5)
         loop = in_memory(model, clock)
         await ask(loop)
@@ -231,7 +231,7 @@ def short_time(seconds: int) -> RunSpec:
 
 
 def sqlite_loop(folder: Path) -> tuple[Loop, sqlite3.Connection]:
-    clock = FakeClock()
+    clock = JumpingClock()
     connection = open_database(folder / "state.db", timeout_s=0.2)
     assert not isinstance(connection, Failure), connection
     loop = in_memory(ModelByRequest(three_steps), clock)

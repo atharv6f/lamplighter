@@ -15,7 +15,7 @@ from lamplighter.adapters.in_memory import (
     InMemoryInbox,
     InMemoryOutbox,
 )
-from lamplighter.core import Deps
+from lamplighter.core import Deps, RunningSessions
 from lamplighter.ports import (
     Clock,
     Event,
@@ -32,8 +32,9 @@ from lamplighter.ports import (
     ToolResult,
     ToolSpec,
 )
-from tests.fake_clock import FakeClock
 from tests.model_by_request import Choose
+from tests.run_history import SESSION, stop
+from tests.waiting_clock import JumpingClock
 
 MAX_RECORD_BYTES = 200_000
 
@@ -49,6 +50,7 @@ class Loop:
     tools: ToolProvider
     clock: Clock
     ids: CountingIds
+    running: RunningSessions
 
     @property
     def deps(self) -> Deps:
@@ -60,6 +62,7 @@ class Loop:
             tools=self.tools,
             clock=self.clock,
             ids=self.ids,
+            running=self.running,
         )
 
     async def events(self, session_id: str) -> tuple[Event, ...]:
@@ -84,7 +87,7 @@ def in_memory(
     tools: ToolProvider | None = None,
 ) -> Loop:
     """Give the loop's ports in memory, with the stub tools unless told otherwise."""
-    clock = clock or FakeClock()
+    clock = clock or JumpingClock()
     return Loop(
         log=InMemoryEventLog({}, MAX_RECORD_BYTES),
         inbox=InMemoryInbox(MAX_RECORD_BYTES),
@@ -93,6 +96,7 @@ def in_memory(
         tools=tools or StubTools(clock),
         clock=clock,
         ids=CountingIds(),
+        running=RunningSessions(),
     )
 
 
@@ -136,3 +140,10 @@ def note_tools(clock: Clock, seconds: float = 0.0) -> ScriptedTools:
         return ToolResult(text=f"Tick {ticks[0]}.", is_error=False)
 
     return ScriptedTools([ScriptedTool(NOTE_SPEC, note), ScriptedTool(TICK_SPEC, tick)])
+
+
+async def stop_now(loop: Loop, native_id: str, session_id: str = SESSION) -> None:
+    """Save a stop and raise its flag, in the order the intake does."""
+    accepted = await loop.inbox.accept(stop(native_id, session_id))
+    assert not isinstance(accepted, Failure), accepted
+    loop.running.ask_stop(session_id)

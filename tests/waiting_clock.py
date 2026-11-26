@@ -64,3 +64,34 @@ class WaitingClock:
             await settle()
         self.seconds = target
         await settle()
+
+
+class JumpingClock(WaitingClock):
+    """A waiting clock that moves time on by itself.
+
+    Whenever every task is waiting, time jumps to the earliest sleeper, as
+    on a real machine where nothing else happens in between. So a run with
+    tools and timers ends at once in real time, with each wait in its true
+    order and every reading of the clock as it would be.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._keeper: asyncio.Task[None] | None = None
+
+    async def sleep(self, seconds: float) -> None:
+        if self._keeper is None or self._keeper.done():
+            self._keeper = asyncio.ensure_future(self._keep_time())
+        await super().sleep(seconds)
+
+    async def _keep_time(self) -> None:
+        while True:
+            await settle()
+            wake_at = self._earliest()
+            if wake_at is None:
+                return
+            await self.advance(wake_at - self.seconds)
+
+    def _earliest(self) -> float | None:
+        live = [wake_at for wake_at, _, woken in self._sleepers if not woken.done()]
+        return min(live, default=None)

@@ -18,6 +18,7 @@ from lamplighter.core.run_deps import Deps
 from lamplighter.core.run_ending import TurnEnd
 from lamplighter.core.run_spec import RunSpec
 from lamplighter.core.run_turn import run_turn
+from lamplighter.core.running_sessions import RunningSessions
 from lamplighter.core.transcript import rebuild_messages
 
 __all__ = [
@@ -33,6 +34,7 @@ __all__ = [
     "Prices",
     "Reply",
     "RunSpec",
+    "RunningSessions",
     "TurnEnd",
     "UnfinishedSession",
     "UnfinishedWork",

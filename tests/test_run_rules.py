@@ -22,10 +22,10 @@ from lamplighter.ports import (
     ToolCallPart,
     Usage,
 )
-from tests.fake_clock import FakeClock
 from tests.loop_kit import Loop, in_memory, in_order, note_tools
 from tests.model_by_request import ModelByRequest
 from tests.run_history import SESSION, SPEC, inbound
+from tests.waiting_clock import JumpingClock
 
 QUESTION = "Note some numbers."
 USAGE = Usage(input_uncached=100, cache_read=0, cache_write=0, output=20)
@@ -101,7 +101,7 @@ def run(
     model_seconds: float = 0.0,
 ) -> Ran:
     async def scenario() -> Ran:
-        clock = FakeClock()
+        clock = JumpingClock()
         tools = note_tools(clock)
         model = ModelByRequest(in_order(*turns), clock, model_seconds)
         loop = in_memory(model, clock, tools)
@@ -463,7 +463,7 @@ class LosingResults:
 
 def test_a_call_interrupted_again_and_again_is_warned_before_it_is_stopped() -> None:
     async def scenario() -> None:
-        clock = FakeClock()
+        clock = JumpingClock()
         tools = note_tools(clock)
         model = ModelByRequest(in_order(*(calls(note(f"c{n}")) for n in range(1, 5))))
         loop = in_memory(model, clock, tools)

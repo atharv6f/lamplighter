@@ -3,9 +3,12 @@
 from lamplighter.core import harness_texts
 from lamplighter.core.event_types import TOOL_INTENT, TOOL_RESULT
 from lamplighter.core.harness_texts import HarnessKind, with_repeat_warning
+from lamplighter.core.interruptible import CutShort, Finished, NotStarted, interruptible
+from lamplighter.core.limits import time_left_ms
 from lamplighter.core.repeat_rule import deserves_warning
 from lamplighter.core.run_deps import Deps
 from lamplighter.core.run_events import elapsed_ms, in_run
+from lamplighter.core.run_spec import RunSpec
 from lamplighter.core.run_view import OpenCall, RunView
 from lamplighter.ports import (
     Failure,
@@ -18,12 +21,15 @@ from lamplighter.ports import (
 
 
 async def run_call(
-    session_id: str, view: RunView, call: OpenCall, deps: Deps
+    session_id: str, view: RunView, call: OpenCall, spec: RunSpec, deps: Deps
 ) -> Failure | None:
     """Save `tool_intent`, run the tool, and save its result.
 
     The intent is saved first, so after a kill the call is answered as
-    interrupted and never run a second time.
+    interrupted and never run a second time. A stop that is already known
+    keeps the tool from starting. A stop, or the end of the run's time, cuts
+    a running tool short. A tool that ends with a result inside the cancel
+    bound has that result saved.
     """
     part = call.call
     intent = in_run(
@@ -39,19 +45,27 @@ async def run_call(
     if part.arguments is None:
         raise ValueError("a call whose arguments did not parse is never run")
     start = deps.clock.monotonic()
-    outcome = await deps.tools.call(part.name, part.arguments)
-    duration_ms = elapsed_ms(start, deps.clock.monotonic())
-    if isinstance(outcome, Failure):
-        outcome = ToolResult(
-            text=harness_texts.tool_failed(part.name, outcome.kind, outcome.message),
-            is_error=True,
-        )
-    text = _maybe_warned(view, call, outcome.text)
+    raced = await interruptible(
+        deps.tools.call(part.name, part.arguments),
+        deps.running.signal_for(session_id),
+        deps.clock,
+        allowance_s=time_left_ms(view, spec) / 1000,
+        bound_s=spec.cancel_bound_ms / 1000,
+    )
+    duration_ms: int | None = elapsed_ms(start, deps.clock.monotonic())
+    match raced:
+        case NotStarted():
+            payload = harness_result(call, "not_run", harness_texts.not_run(part.name))
+            duration_ms = None
+        case CutShort():
+            payload = _cut_short(call, raced)
+        case Finished():
+            payload = _tool_result(view, call, raced.value)
     result = in_run(
         view,
         utc_text(deps.clock.now()),
         TOOL_RESULT,
-        {"call_id": part.id, "text": text, "is_error": outcome.is_error},
+        payload,
         cause=event_id_for(session_id, intent_seq),
         duration_ms=duration_ms,
     )
@@ -84,6 +98,30 @@ async def answer_call(
     )
     saved = await deps.log.append(session_id, (result,), view.last_seq)
     return saved if isinstance(saved, Failure) else None
+
+
+def _tool_result(
+    view: RunView, call: OpenCall, outcome: ToolResult | Failure
+) -> JsonObject:
+    name = call.call.name
+    if isinstance(outcome, Failure):
+        outcome = ToolResult(
+            text=harness_texts.tool_failed(name, outcome.kind, outcome.message),
+            is_error=True,
+        )
+    text = _maybe_warned(view, call, outcome.text)
+    return {"call_id": call.call.id, "text": text, "is_error": outcome.is_error}
+
+
+def _cut_short(call: OpenCall, cut: CutShort) -> JsonObject:
+    name = call.call.name
+    if cut.reason == "stop":
+        harness, text = "stopped", harness_texts.stopped(name)
+    else:
+        harness, text = "out_of_time", harness_texts.out_of_time(name)
+    if cut.still_running:
+        text = f"{text} {harness_texts.DID_NOT_STOP}"
+    return harness_result(call, harness, text)
 
 
 def harness_result(call: OpenCall, harness: HarnessKind, text: str) -> JsonObject:

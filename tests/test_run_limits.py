@@ -15,7 +15,6 @@ from lamplighter.ports import (
     ToolResultPart,
     Usage,
 )
-from tests.fake_clock import FakeClock
 from tests.loop_kit import NOTE_SPEC, Loop, in_memory, in_order, note_tools
 from tests.model_by_request import ModelByRequest, assistant_turns
 from tests.run_history import SESSION, SPEC, inbound
@@ -31,6 +30,7 @@ from tests.test_run_rules import (
     run,
 )
 from tests.test_run_turn import FailingLog
+from tests.waiting_clock import JumpingClock
 
 
 def runaway(request: ModelRequest) -> ScriptedReply:
@@ -41,7 +41,7 @@ def runaway(request: ModelRequest) -> ScriptedReply:
 
 def run_away(usage: Usage = USAGE, **limits: int) -> Ran:
     async def scenario() -> Ran:
-        clock = FakeClock()
+        clock = JumpingClock()
         tools = note_tools(clock)
         model = ModelByRequest(
             lambda request: replace(runaway(request), usage=usage),
@@ -101,7 +101,7 @@ def test_the_time_limit_stops_a_runaway() -> None:
 
 def test_the_time_tools_take_counts_toward_the_time_limit() -> None:
     async def scenario() -> Ran:
-        clock = FakeClock()
+        clock = JumpingClock()
         tools = note_tools(clock, seconds=100)
         model = ModelByRequest(runaway, clock)
         loop = in_memory(model, clock, tools)
@@ -213,7 +213,7 @@ def test_time_up_with_calls_open_answers_each_not_run() -> None:
 
 def test_a_lost_model_call_counts_as_a_step_and_spends_nothing() -> None:
     async def scenario() -> None:
-        clock = FakeClock()
+        clock = JumpingClock()
         tools = note_tools(clock)
         model = ModelByRequest(runaway, clock, 100)
         loop = in_memory(model, clock, tools)
@@ -244,7 +244,7 @@ def test_a_lost_model_call_counts_as_a_step_and_spends_nothing() -> None:
 
 def test_a_message_waiting_at_a_limit_starts_the_next_run() -> None:
     async def scenario() -> None:
-        clock = FakeClock()
+        clock = JumpingClock()
         model = ModelByRequest(in_order(calls(note("c1")), DONE), clock)
         loops: list[Loop] = []
 
@@ -278,7 +278,7 @@ def test_a_message_waiting_at_a_limit_starts_the_next_run() -> None:
 
 def test_after_a_failed_run_the_next_request_carries_the_note() -> None:
     async def scenario() -> None:
-        clock = FakeClock()
+        clock = JumpingClock()
         model = ModelByRequest(in_order(failing("denied"), DONE), clock)
         loop = in_memory(model, clock, note_tools(clock))
         await loop.inbox.accept(inbound("n1", QUESTION))
@@ -305,7 +305,7 @@ def test_a_run_open_under_other_settings_ends_after_its_started_call_is_answered
     None
 ):
     async def scenario() -> None:
-        clock = FakeClock()
+        clock = JumpingClock()
         tools = note_tools(clock)
         model = ModelByRequest(in_order(calls(note("c1"), note("c2", n=2))), clock)
         loop = in_memory(model, clock, tools)

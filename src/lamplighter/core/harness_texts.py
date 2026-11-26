@@ -150,6 +150,9 @@ def model_failed_notice(kind: str, message: str) -> str:
     return notice
 
 
+# The failure the loop saves for a model call it had to cut at its deadline.
+MODEL_OUT_OF_TIME = "The model did not answer in the time it was given."
+
 EMPTY_REPLY_NOTICE = (
     "The run ended because the model sent an empty reply, and asking again did not"
     " help."
