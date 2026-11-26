@@ -28,6 +28,15 @@ def effect_key(session_id: str, reply_seq: int, call_index: int, attempt: int) -
     return _hash(["effect", session_id, reply_seq, call_index, attempt])
 
 
+def out_id_for(session_id: str, seq: int) -> str:
+    """Give the id of the message to you made from the event at `seq`.
+
+    The event is the run's reply_ready, so a close that runs again after a
+    kill enqueues the same row and the outbox keeps one.
+    """
+    return _hash(["out", session_id, seq])
+
+
 def _hash(items: list[str | int]) -> str:
     # The first item names the kind of id, so two kinds never share a hash.
     return hashlib.sha256(canonical_json(items).encode("utf-8")).hexdigest()

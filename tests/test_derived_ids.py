@@ -7,6 +7,7 @@ from lamplighter.ports import (
     effect_key,
     event_id_for,
     inbound_event_id,
+    out_id_for,
     saved_json,
 )
 
@@ -50,4 +51,10 @@ def test_the_action_hash_example_follows_from_its_formula() -> None:
     listed = canonical_json(["action", "write_file", args, "file:notes.txt"])
     assert hashlib.sha256(listed.encode()).hexdigest() == (
         "92511298e90d8b74249f007ad92457d731c9b26ccec4e0d3c8d76ea98ce5491c"
+    )
+
+
+def test_an_outbound_id_is_worked_out_from_the_session_and_the_seq() -> None:
+    assert out_id_for("demo-session", 12) == (
+        "9131f9196d24c6b60400011912c7ea9b0d0c4d966a4b0c60ff33d9f42ed17e2a"
     )

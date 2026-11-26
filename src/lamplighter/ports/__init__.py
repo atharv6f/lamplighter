@@ -3,7 +3,12 @@
 from lamplighter.ports.blob_check import blob_damage, check_handle, check_put
 from lamplighter.ports.blob_store import BlobHandle, BlobStore
 from lamplighter.ports.clock import Clock, utc_text
-from lamplighter.ports.derived_ids import effect_key, event_id_for, inbound_event_id
+from lamplighter.ports.derived_ids import (
+    effect_key,
+    event_id_for,
+    inbound_event_id,
+    out_id_for,
+)
 from lamplighter.ports.effect_check import (
     check_begin,
     check_finish,
@@ -34,6 +39,7 @@ from lamplighter.ports.event_log import (
     Upcasters,
 )
 from lamplighter.ports.failure import Failure, FailureEffect, FailureKind
+from lamplighter.ports.id_source import IdSource
 from lamplighter.ports.inbound import Inbound, Sender
 from lamplighter.ports.inbox import Accepted, Inbox, InboxEntry
 from lamplighter.ports.inbox_check import (
@@ -71,12 +77,20 @@ from lamplighter.ports.model import (
     Usage,
     UsageEvent,
 )
+from lamplighter.ports.outbound import DeliveryReceipt, Outbound
 from lamplighter.ports.plain import from_plain, from_stored, to_plain
 from lamplighter.ports.request_check import check_request
+from lamplighter.ports.tool_provider import ToolProvider, ToolResult
 from lamplighter.ports.upcast import upcast
 from lamplighter.ports.value_rules import is_hash, is_id
 
 __all__ = [
+    "out_id_for",
+    "ToolResult",
+    "ToolProvider",
+    "Outbound",
+    "DeliveryReceipt",
+    "IdSource",
     "Accepted",
     "Action",
     "ActionClass",
