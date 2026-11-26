@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Secrets
+.env
+.env.*
+
+# Local state and traces stay on the Mac
+*.db
+*.sqlite
+*.sqlite3
+traces/
+
+# macOS
+.DS_Store
