@@ -1,0 +1,24 @@
+# Settings for Lamplighter. No secret goes in this file.
+
+# The model, and what it can do on Anthropic's API.
+# The limits are from Anthropic's models page, read on 26 November 2026.
+[model]
+adapter = "anthropic"
+model = "claude-opus-5-5"
+window = 1_000_000
+max_output = 128_000
+tool_calls = true
+multiple_tool_calls = true
+cache_hints = 4
+# How far a token count may be from the real prompt size, in thousandths of
+# that size. This is a first guess. The live token count test measures it.
+count_error_permille = 50
+
+# What one million tokens cost, in whole micro-dollars. A micro-dollar is a
+# millionth of a dollar, so 4_000_000 is $4.00.
+# From Anthropic's pricing page for this model, read on 26 November 2026.
+[prices]
+input_uncached = 4_000_000
+cache_read = 200_000
+cache_write = 5_000_000
+output = 20_000_000
