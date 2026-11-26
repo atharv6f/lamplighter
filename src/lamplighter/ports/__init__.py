@@ -34,6 +34,13 @@ from lamplighter.ports.event_log import (
     Upcasters,
 )
 from lamplighter.ports.failure import Failure, FailureEffect, FailureKind
+from lamplighter.ports.inbound import Inbound, Sender
+from lamplighter.ports.inbox import Accepted, Inbox, InboxEntry
+from lamplighter.ports.inbox_check import (
+    check_accept,
+    check_mark_routed,
+    unknown_inbox_row,
+)
 from lamplighter.ports.json_text import (
     as_saved,
     canonical_json,
@@ -70,6 +77,7 @@ from lamplighter.ports.upcast import upcast
 from lamplighter.ports.value_rules import is_hash
 
 __all__ = [
+    "Accepted",
     "Action",
     "ActionClass",
     "Begun",
@@ -87,6 +95,9 @@ __all__ = [
     "Failure",
     "FailureEffect",
     "FailureKind",
+    "Inbound",
+    "Inbox",
+    "InboxEntry",
     "JsonObject",
     "JsonValue",
     "Message",
@@ -101,6 +112,7 @@ __all__ = [
     "RUN_STARTED",
     "ReasoningEvent",
     "ReasoningPart",
+    "Sender",
     "SessionInfo",
     "SessionState",
     "StopEvent",
@@ -119,10 +131,12 @@ __all__ = [
     "as_saved",
     "blob_damage",
     "canonical_json",
+    "check_accept",
     "check_append",
     "check_begin",
     "check_finish",
     "check_handle",
+    "check_mark_routed",
     "check_put",
     "check_read",
     "check_request",
@@ -139,6 +153,7 @@ __all__ = [
     "saved_size",
     "to_plain",
     "unknown_effect",
+    "unknown_inbox_row",
     "upcast",
     "utc_text",
 ]

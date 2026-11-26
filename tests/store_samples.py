@@ -4,8 +4,11 @@ import dataclasses
 
 from lamplighter.ports import (
     Action,
+    BlobHandle,
     EffectResult,
+    Inbound,
     Outcome,
+    Sender,
     effect_key,
 )
 
@@ -49,3 +52,21 @@ DONE_WITH_UNDO = EffectResult(
 
 HAPPENED = Outcome(happened=True, settled_by="probe", evidence={"sha256": "e" * 64})
 DID_NOT_HAPPEN = Outcome(happened=False, settled_by="user", evidence={"answer": "no"})
+
+
+PHOTO = BlobHandle(sha256="9" * 64, size=1_204, media_type="image/jpeg")
+
+
+def inbound(native_id: str = "8812", channel: str = "telegram") -> Inbound:
+    """A made-up message from a phone, asking about a list."""
+    return Inbound(
+        channel=channel,
+        native_id=native_id,
+        conversation="chat-1",
+        sender=Sender(id="user-1", verified=True),
+        kind="message",
+        text="What is on my shopping list?",
+        sent_at="2026-11-26T07:35:10.000Z",
+        received_at="2026-11-26T07:35:12.345Z",
+        attachments=(PHOTO,),
+    )

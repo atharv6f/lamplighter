@@ -3,5 +3,11 @@
 from lamplighter.adapters.in_memory.blob_store import InMemoryBlobStore
 from lamplighter.adapters.in_memory.effect_ledger import InMemoryEffectLedger
 from lamplighter.adapters.in_memory.event_log import InMemoryEventLog
+from lamplighter.adapters.in_memory.inbox import InMemoryInbox
 
-__all__ = ["InMemoryBlobStore", "InMemoryEffectLedger", "InMemoryEventLog"]
+__all__ = [
+    "InMemoryInbox",
+    "InMemoryBlobStore",
+    "InMemoryEffectLedger",
+    "InMemoryEventLog",
+]
