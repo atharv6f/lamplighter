@@ -6,7 +6,7 @@ The harness is written by hand in Python, to learn how one works.
 
 ## Status
 
-Project setup only. Nothing runs yet.
+Model access is built: one interface for asking a model for a reply, a scripted model for tests, a client for Anthropic's API, and a way to record calls and play them back. Nothing calls it yet, so there is still nothing to run.
 
 ## Layout
 
@@ -26,3 +26,23 @@ make check
 ```
 
 `make check` runs the formatter check, lint, type check, import rule and tests. The code rules are in [CONTRIBUTING.md](CONTRIBUTING.md).
+
+`lamplighter.toml` holds the settings: the model, its limits and its prices. No secret goes in it.
+
+## Live tests
+
+Three tests call the real Anthropic API. They cost a little money, so `make check` leaves them out.
+
+Put your API key in a file named `.env` in this folder. Git ignores that file. It holds one line:
+
+```
+ANTHROPIC_API_KEY=your-key-here
+```
+
+Then run:
+
+```
+uv run --env-file .env pytest -m live -s
+```
+
+Each test prints the token counts and the cost of its calls.

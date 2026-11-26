@@ -41,6 +41,10 @@ typeCheckingMode = "strict"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Tests marked "live" call the real API and cost money, so the default run
+# leaves them out. "-m live" on the command line runs them.
+addopts = "-m 'not live'"
+markers = ["live: calls the real Anthropic API and needs ANTHROPIC_API_KEY"]
 
 [tool.importlinter]
 root_package = "lamplighter"
