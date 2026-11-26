@@ -21,3 +21,16 @@ input_uncached = 4_000_000
 cache_read = 200_000
 cache_write = 5_000_000
 output = 20_000_000
+
+# Where the saved state lives: one SQLite file and a folder of blobs.
+# Keep it out of ~/Documents, ~/Desktop and iCloud Drive. A sync tool that
+# copies the file while it is in use can damage it, and no check can find
+# every synced folder.
+[store]
+dir = "~/.lamplighter"
+# The largest saved JSON value: one event payload, action, result or inbound
+# message. It must stay above the largest model reply, which is saved whole.
+# 128,000 output tokens at about 4 bytes each is about 0.5 MB.
+max_record_bytes = 4_194_304
+# The largest blob, 64 MiB.
+max_blob_bytes = 67_108_864

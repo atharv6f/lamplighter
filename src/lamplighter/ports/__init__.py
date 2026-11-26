@@ -74,7 +74,7 @@ from lamplighter.ports.model import (
 from lamplighter.ports.plain import from_plain, from_stored, to_plain
 from lamplighter.ports.request_check import check_request
 from lamplighter.ports.upcast import upcast
-from lamplighter.ports.value_rules import is_hash
+from lamplighter.ports.value_rules import is_hash, is_id
 
 __all__ = [
     "Accepted",
@@ -148,6 +148,7 @@ __all__ = [
     "from_stored",
     "inbound_event_id",
     "is_hash",
+    "is_id",
     "read_saved_json",
     "saved_json",
     "saved_size",

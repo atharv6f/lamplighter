@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from lamplighter.app.config import load_config
+from lamplighter.app.config import StoreSettings, load_config, store_folder
 from lamplighter.app.main import build_model
 from lamplighter.core import Prices
 from lamplighter.ports import ModelProfile
@@ -24,6 +24,11 @@ input_uncached = 4_000_000
 cache_read = 200_000
 cache_write = 5_000_000
 output = 20_000_000
+
+[store]
+dir = "~/.lamplighter"
+max_record_bytes = 4_194_304
+max_blob_bytes = 67_108_864
 """
 
 
@@ -51,6 +56,54 @@ def test_a_settings_file_is_read_into_records(tmp_path: Path) -> None:
     )
 
 
+def test_the_store_folder_is_read_as_an_absolute_path_in_the_home_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config = load_config(write(tmp_path, GOOD))
+    assert config.store == StoreSettings(
+        dir=str((tmp_path / ".lamplighter").resolve()),
+        max_record_bytes=4_194_304,
+        max_blob_bytes=67_108_864,
+    )
+
+
+@pytest.mark.parametrize(
+    "setting",
+    [
+        "~/Documents/Lamplighter/state",
+        "~/Documents",
+        "~/Desktop/store",
+        "~/Library/Mobile Documents/com~apple~CloudDocs/store",
+        "~/Library/CloudStorage/Dropbox/store",
+        "/Users/someone/Library/CloudStorage/Box/store",
+        ".lamplighter",
+        "store",
+    ],
+)
+def test_a_store_folder_that_a_sync_tool_may_copy_or_that_is_relative_is_refused(
+    tmp_path: Path, setting: str
+) -> None:
+    with pytest.raises(ValueError, match="store.dir"):
+        store_folder(setting, tmp_path)
+
+
+def test_a_store_folder_reached_through_a_link_into_documents_is_refused(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "Documents").mkdir()
+    (tmp_path / "shortcut").symlink_to(tmp_path / "Documents")
+    with pytest.raises(ValueError, match="Documents"):
+        store_folder("~/shortcut/store", tmp_path)
+
+
+@pytest.mark.parametrize("setting", ["~/.lamplighter", "/var/lamplighter", "~"])
+def test_a_store_folder_outside_synced_folders_is_accepted(
+    tmp_path: Path, setting: str
+) -> None:
+    assert store_folder(setting, tmp_path).is_absolute()
+
+
 def test_settings_cannot_be_changed_once_read(tmp_path: Path) -> None:
     config = load_config(write(tmp_path, GOOD))
     with pytest.raises(dataclasses.FrozenInstanceError):
@@ -66,6 +119,8 @@ def test_settings_cannot_be_changed_once_read(tmp_path: Path) -> None:
         ("output = 20_000_000\n", "output = 20.5\n"),
         ("[prices]", "[costs]"),
         ("tool_calls = true\n", "tool_calls = 1\n"),
+        ("max_blob_bytes = 67_108_864\n", ""),
+        ('dir = "~/.lamplighter"', 'dir = "~/Documents/state"'),
     ],
 )
 def test_a_settings_file_that_does_not_fit_is_rejected(
@@ -88,6 +143,13 @@ def test_the_settings_file_in_the_repo_names_the_model_and_its_prices() -> None:
         cache_write=5_000_000,
         output=20_000_000,
     )
+
+
+def test_the_settings_file_in_the_repo_keeps_the_store_out_of_the_checkout() -> None:
+    config = load_config(SETTINGS)
+    assert config.store.dir == str(Path("~/.lamplighter").expanduser().resolve())
+    assert config.store.max_record_bytes == 4 * 1024 * 1024
+    assert config.store.max_blob_bytes == 64 * 1024 * 1024
 
 
 def test_the_builder_gives_a_client_for_the_model_in_the_settings() -> None:

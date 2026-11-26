@@ -9,6 +9,7 @@ from collections.abc import Generator, Set
 from dataclasses import dataclass
 from pathlib import Path
 
+from lamplighter.adapters.drive import flush_folder, write_flushed
 from lamplighter.ports import (
     BlobHandle,
     Clock,
@@ -24,10 +25,6 @@ _SOURCE = "BlobStore/file"
 # A put that returned less than this long ago is never swept, because the
 # event that points at its blob may not be saved yet.
 SWEEP_GRACE_S = 3_600
-
-# macOS only. A plain fsync there hands the data to the drive and does not
-# make the drive write it down. Python's os.fsync is the plain one.
-_FULL_FLUSH = getattr(fcntl, "F_FULLFSYNC", None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,21 +118,15 @@ class FileBlobStore:
         return BlobTotals(count=len(sizes), total_bytes=sum(sizes))
 
     def _write(self, sha256: str, data: bytes) -> None:
+        # A temporary left by a killed put of the same bytes is written over.
         temporary = self._folder / f".{sha256}.{os.getpid()}.tmp"
-        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        try:
-            view = memoryview(data)
-            while view:
-                view = view[os.write(descriptor, view) :]
-            flush(descriptor)
-        finally:
-            os.close(descriptor)
+        write_flushed(temporary, data, os.O_TRUNC)
         # The time is set from the clock that was passed in, so the sweep's
         # one hour rule reads the same clock a test controls.
         moment = self._clock.now().timestamp()
         os.utime(temporary, (moment, moment))
         os.replace(temporary, self._folder / sha256)
-        _flush_folder(self._folder)
+        flush_folder(self._folder)
 
     @contextlib.contextmanager
     def _locked(self, how: int) -> Generator[None]:
@@ -146,28 +137,6 @@ class FileBlobStore:
             yield
         finally:
             os.close(descriptor)
-
-
-def flush(descriptor: int) -> None:
-    """Force a file's data to the drive, with the full flush where there is one."""
-    if _FULL_FLUSH is not None:
-        try:
-            fcntl.fcntl(descriptor, _FULL_FLUSH)
-            return
-        except OSError:
-            # Some file systems refuse it. SQLite falls back to a plain sync
-            # in the same case, and so does this.
-            pass
-    os.fsync(descriptor)
-
-
-def _flush_folder(folder: Path) -> None:
-    # Makes the rename itself survive a power cut, not only the file's bytes.
-    descriptor = os.open(folder, os.O_RDONLY)
-    try:
-        flush(descriptor)
-    finally:
-        os.close(descriptor)
 
 
 def _is_unused(entry: os.DirEntry[str], in_use: Set[str], cutoff: float) -> bool:
