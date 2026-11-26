@@ -67,12 +67,14 @@ async def answer_call(
     tools: tuple[ToolSpec, ...],
     deps: Deps,
 ) -> Failure | None:
-    """Save the harness's own result for a call that is not run."""
-    text = _harness_text(call, harness, tools)
-    if harness in ("arguments_unparsed", "unknown_tool", "cut_off"):
-        # A model that sends the same broken call again and again is
-        # warned and then stopped, as one that repeats a working call is.
-        text = _maybe_warned(view, call, text)
+    """Save the harness's own result for a call that is not run.
+
+    The result is warned as a tool's result is, so a model that sends the
+    same broken call again and again is warned and then stopped. The same
+    holds for a call answered `interrupted`: the run goes on after it, and
+    a run that ends a repeat must first have warned of it.
+    """
+    text = _maybe_warned(view, call, _harness_text(call, harness, tools))
     result = in_run(
         view,
         utc_text(deps.clock.now()),
