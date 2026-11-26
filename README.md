@@ -31,7 +31,7 @@ make check
 
 ## Live tests
 
-Three tests call the real Anthropic API. They cost a little money, so `make check` leaves them out.
+Four tests call the real Anthropic API. They cost a little money, so `make check` leaves them out.
 
 Put your API key in a file named `.env` in this folder. Git ignores that file. It holds one line:
 

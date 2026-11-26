@@ -128,38 +128,65 @@ def test_a_second_call_with_the_same_long_prompt_reads_from_the_cache(
     assert second.usage.cache_read > 0
 
 
+async def round_trip(client: ModelClient, question: Message) -> tuple[Reply, Reply]:
+    """Ask, run the tool the model calls, and send the result back."""
+    first_ask = dataclasses.replace(request(question), tools=(READ_FILE,))
+    first = await ask(client, first_ask)
+    calls = [p for p in first.message.parts if isinstance(p, ToolCallPart)]
+    assert calls, f"the model called no tool: {first.message.parts}"
+    results = [
+        ToolResultPart(call_id=call.id, text="milk\neggs\ntea", is_error=False)
+        for call in calls
+    ]
+    # The reply goes back exactly as it came, reasoning included.
+    second_ask = dataclasses.replace(
+        first_ask, messages=(question, first.message, user(*results))
+    )
+    return first, await ask(client, second_ask)
+
+
+def reasoning_in(reply: Reply) -> list[ReasoningPart]:
+    return [p for p in reply.message.parts if isinstance(p, ReasoningPart)]
+
+
 def test_a_tool_call_and_its_result_make_a_round_trip(
     client: ModelClient, config: Config
 ) -> None:
     question = user(
         TextPart(text="Read list.txt with the tool, then tell me what is on it.")
     )
-    first_ask = dataclasses.replace(request(question), tools=(READ_FILE,))
-
-    async def round_trip() -> tuple[Reply, Reply]:
-        first = await ask(client, first_ask)
-        calls = [p for p in first.message.parts if isinstance(p, ToolCallPart)]
-        assert calls, f"the model called no tool: {first.message.parts}"
-        results = [
-            ToolResultPart(call_id=call.id, text="milk\neggs\ntea", is_error=False)
-            for call in calls
-        ]
-        # The reply goes back exactly as it came, reasoning included.
-        second_ask = dataclasses.replace(
-            first_ask, messages=(question, first.message, user(*results))
-        )
-        return first, await ask(client, second_ask)
-
-    first, second = asyncio.run(round_trip())
+    first, second = asyncio.run(round_trip(client, question))
     show("call that asks for the tool", first, config)
     show("call that carries the result", second, config)
-    reasoning = [p for p in first.message.parts if isinstance(p, ReasoningPart)]
-    print(f"reasoning parts carried back: {len(reasoning)}")
+    print(f"reasoning parts carried back: {len(reasoning_in(first))}")
     assert isinstance(first.end, StopEvent)
     assert first.end.reason == "tool_calls"
     assert isinstance(second.end, StopEvent)
     assert second.end.reason == "end"
     assert any(isinstance(p, TextPart) and p.text for p in second.message.parts)
+
+
+def test_reasoning_made_before_a_tool_call_goes_back_and_is_accepted(
+    client: ModelClient, config: Config
+) -> None:
+    # The model decides for itself whether to reason, and skips it on an easy
+    # prompt. This one takes a few steps to work out which file to read.
+    puzzle = (
+        "Three files hold my lists: a.txt, b.txt and c.txt. One holds the"
+        " shopping, one the chores and one the phone numbers. The shopping is"
+        " not in the file whose name comes first. The file c.txt holds the"
+        " chores or the shopping. The chores are in the file right after the"
+        " one with the phone numbers. Work out which file holds the shopping,"
+        " read it with the tool, and tell me what is on it."
+    )
+    first, second = asyncio.run(round_trip(client, user(TextPart(text=puzzle))))
+    show("call that reasons, then asks for the tool", first, config)
+    show("call that carries the reasoning back", second, config)
+    print(f"reasoning parts carried back: {len(reasoning_in(first))}")
+    assert reasoning_in(first), "the model did not reason, so nothing was sent back"
+    # A reasoning part the server did not accept would have failed the call.
+    assert isinstance(second.end, StopEvent)
+    assert second.end.reason == "end"
 
 
 def test_a_token_count_is_as_close_to_the_real_size_as_the_profile_says(

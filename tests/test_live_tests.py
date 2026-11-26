@@ -50,6 +50,31 @@ def test_the_round_trip_test_fails_when_the_model_calls_no_tool() -> None:
         round_trip(scripted(PLAIN, PLAIN), CONFIG)
 
 
+def test_the_reasoning_test_passes_when_reasoning_comes_before_the_tool_call() -> None:
+    reasoning_test = (
+        live.test_reasoning_made_before_a_tool_call_goes_back_and_is_accepted
+    )
+    reasoning_test(scripted(ASKS_FOR_TOOL, PLAIN), CONFIG)
+
+
+def test_the_reasoning_test_fails_when_the_model_did_not_reason() -> None:
+    reasoning_test = (
+        live.test_reasoning_made_before_a_tool_call_goes_back_and_is_accepted
+    )
+    no_reasoning = ScriptedReply(parts=(CALL,), reason="tool_calls")
+    with pytest.raises(AssertionError, match="did not reason"):
+        reasoning_test(scripted(no_reasoning, PLAIN), CONFIG)
+
+
+def test_the_reasoning_test_fails_when_the_second_call_is_refused() -> None:
+    reasoning_test = (
+        live.test_reasoning_made_before_a_tool_call_goes_back_and_is_accepted
+    )
+    refused = ScriptedBreak(parts=(), failure=THROTTLED)
+    with pytest.raises(pytest.fail.Exception, match="throttled"):
+        reasoning_test(scripted(ASKS_FOR_TOOL, refused), CONFIG)
+
+
 def test_the_count_test_passes_when_the_count_is_the_real_size() -> None:
     count_test = (
         live.test_a_token_count_is_as_close_to_the_real_size_as_the_profile_says
