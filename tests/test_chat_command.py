@@ -23,7 +23,6 @@ from lamplighter.adapters import (
     ScriptedReply,
     StubTools,
     SystemClock,
-    SystemIds,
 )
 from lamplighter.adapters.sqlite import (
     SqliteEffectLedger,
@@ -34,7 +33,7 @@ from lamplighter.adapters.sqlite import (
 )
 from lamplighter.app.chat import LOCK_HELD, UNSETTLED, WAITING, ChatParts, chat
 from lamplighter.app.config import Config, load_config
-from lamplighter.app.main import NO_KEY, main
+from lamplighter.app.main import NO_KEY, chat_parts, main
 from lamplighter.app.single_instance import lock_store
 from lamplighter.ports import (
     EffectLedger,
@@ -84,20 +83,19 @@ def waits_a_minute(request: ModelRequest) -> ScriptedReply:
 
 
 def parts_for(
+    config: Config,
     keyboard: Keyboard,
     screen: io.StringIO,
     errors: io.StringIO,
     choose: Choose = answers,
 ) -> ChatParts:
-    clock = SystemClock()
-    return ChatParts(
-        model=ModelByRequest(choose),
-        tools=StubTools(clock),
-        clock=clock,
-        ids=SystemIds(),
-        reader=keyboard.reader,
-        writer=screen,
-        errors=errors,
+    return chat_parts(
+        config,
+        ModelByRequest(choose),
+        StubTools(SystemClock()),
+        keyboard.reader,
+        screen,
+        errors,
     )
 
 
@@ -124,8 +122,9 @@ def chat_with(
     watchdog = threading.Timer(CHAT_SECONDS, end_input)
     watchdog.start()
     try:
+        config = config_in(tmp_path)
         code = chat(
-            config_in(tmp_path), session, parts_for(keyboard, screen, errors, choose)
+            config, session, parts_for(config, keyboard, screen, errors, choose)
         )
     finally:
         watchdog.cancel()

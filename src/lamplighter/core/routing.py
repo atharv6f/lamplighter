@@ -44,7 +44,7 @@ async def drop_stops(
     """
     seq = view.last_seq
     if new_session:
-        started = _session_started(stops[0].inbound, deps)
+        started = _session_started(stops[0].inbound, utc_text(deps.clock.now()))
         saved = await deps.log.append(session_id, (started,), view.last_seq)
         if isinstance(saved, Failure):
             return saved
@@ -72,7 +72,7 @@ async def start_run(
     at = utc_text(deps.clock.now())
     batch: list[NewEvent] = []
     if new_session:
-        batch.append(_session_started(first, deps))
+        batch.append(_session_started(first, at))
     batch.append(
         NewEvent(
             type=RUN_STARTED,
@@ -117,12 +117,12 @@ async def take_messages(
     return saved if isinstance(saved, Failure) else None
 
 
-def _session_started(inbound: Inbound, deps: Deps) -> NewEvent:
+def _session_started(inbound: Inbound, at: str) -> NewEvent:
     return NewEvent(
         type=SESSION_STARTED,
         v=READ_VERSION[SESSION_STARTED],
         payload={"channel": inbound.channel, "conversation": inbound.conversation},
-        at=utc_text(deps.clock.now()),
+        at=at,
     )
 
 

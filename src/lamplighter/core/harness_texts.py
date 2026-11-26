@@ -124,8 +124,6 @@ def run_end_note(reason: str) -> str | None:
 
 STOPPED_NOTICE = "Stopped."
 
-_LIMIT_UNITS = {"steps": "steps", "seconds": "seconds", "tokens": "tokens"}
-
 _GO_ON = "The work so far is saved. Send a message to go on."
 
 
@@ -133,7 +131,7 @@ def limit_notice(limit: LimitName, allowed: int) -> str:
     """Tell you which limit ended the run and what its value is."""
     if limit == "micro_dollars":
         return f"The run stopped at its limit of ${dollars(allowed)}. {_GO_ON}"
-    return f"The run stopped at its limit of {allowed} {_LIMIT_UNITS[limit]}. {_GO_ON}"
+    return f"The run stopped at its limit of {allowed} {limit}. {_GO_ON}"
 
 
 def dollars(micro_dollars: int) -> str:

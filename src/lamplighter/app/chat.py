@@ -3,19 +3,12 @@
 import asyncio
 import os
 import signal
-import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn, TextIO
 
 from lamplighter.adapters import TerminalChannel
-from lamplighter.adapters.sqlite import (
-    SqliteEffectLedger,
-    SqliteEventLog,
-    SqliteInbox,
-    SqliteOutbox,
-    open_database,
-)
 from lamplighter.app.config import Config
 from lamplighter.app.ctrl_c import CtrlC
 from lamplighter.app.progress import progress_lines
@@ -44,8 +37,6 @@ from lamplighter.ports import (
     is_id,
 )
 
-# How long a write waits for another process that holds the store's lock.
-STORE_TIMEOUT_S = 5.0
 LOCK_HELD = "Another lamplighter process is using this store."
 UNSETTLED = (
     "The store holds an action whose outcome is not known."
@@ -61,14 +52,31 @@ _SOURCE = "app/chat"
 
 
 @dataclass(frozen=True)
+class Stores:
+    """The stores on one opened store file, and how to close that file."""
+
+    log: EventLog
+    inbox: Inbox
+    outbox: Outbox
+    ledger: EffectLedger
+    close: Callable[[], None]
+
+
+@dataclass(frozen=True)
 class ChatParts:
-    """What a chat is built from beside the settings. A test gives its own."""
+    """What a chat is built from beside the settings. A test gives its own.
+
+    The store and the terminal are given as functions, because the store
+    is opened only once the folder is locked, and the terminal is made
+    only once the session id is known.
+    """
 
     model: ModelClient
     tools: ToolProvider
     clock: Clock
     ids: IdSource
-    reader: int
+    open_stores: Callable[[Path], Stores | Failure]
+    terminal: Callable[[str], TerminalChannel]
     writer: TextIO
     errors: TextIO
 
@@ -97,42 +105,32 @@ def chat(config: Config, session_id: str | None, parts: ChatParts) -> int:
 def _open_and_serve(
     config: Config, folder: Path, session_id: str | None, parts: ChatParts
 ) -> int:
-    connection = open_database(folder / "state.db", STORE_TIMEOUT_S)
-    if isinstance(connection, Failure):
-        return _refused(connection.message, parts)
+    stores = parts.open_stores(folder)
+    if isinstance(stores, Failure):
+        return _refused(stores.message, parts)
     try:
-        return asyncio.run(_serve(config, connection, session_id, parts))
+        return asyncio.run(_serve(config, stores, session_id, parts))
     finally:
-        connection.close()
+        stores.close()
 
 
 async def _serve(
-    config: Config,
-    connection: sqlite3.Connection,
-    session_id: str | None,
-    parts: ChatParts,
+    config: Config, stores: Stores, session_id: str | None, parts: ChatParts
 ) -> int:
-    limit = config.store.max_record_bytes
-    log = SqliteEventLog(connection, {}, limit)
-    inbox = SqliteInbox(connection, limit)
-    outbox = SqliteOutbox(connection, parts.clock, limit)
-    ledger = SqliteEffectLedger(connection, parts.clock, limit)
-    others = await _waiting_elsewhere(log, ledger, inbox, outbox, session_id)
+    others = await _waiting_elsewhere(stores, session_id)
     if isinstance(others, Failure):
         return _refused(others.message, parts)
     if session_id is None:
         session_id = parts.ids.new_id()
         parts.writer.write(f"Session {session_id}\n")
-    terminal = TerminalChannel(
-        session_id, parts.clock, parts.ids, parts.reader, parts.writer
-    )
+    terminal = parts.terminal(session_id)
     for other in others:
         terminal.show_line(WAITING.format(id=other))
     running = RunningSessions()
     deps = Deps(
-        log=log,
-        inbox=inbox,
-        outbox=outbox,
+        log=stores.log,
+        inbox=stores.inbox,
+        outbox=stores.outbox,
         model=parts.model,
         tools=parts.tools,
         clock=parts.clock,
@@ -192,11 +190,7 @@ def leave_now(terminal: TerminalChannel) -> NoReturn:
 
 
 async def _waiting_elsewhere(
-    log: EventLog,
-    ledger: EffectLedger,
-    inbox: Inbox,
-    outbox: Outbox,
-    session_id: str | None,
+    stores: Stores, session_id: str | None
 ) -> list[str] | Failure:
     """Give the other sessions with work waiting, or why the start must stop.
 
@@ -204,17 +198,17 @@ async def _waiting_elsewhere(
     reply not yet sent. An action whose outcome is not known stops the
     start, because this version cannot settle one.
     """
-    work = await unfinished_work(log, ledger)
+    work = await unfinished_work(stores.log, stores.ledger)
     if isinstance(work, Failure):
         return work
     if work.other_effects or any(open_.effects for open_ in work.sessions):
         return Failure(
             kind="needs_user", effect="none", message=UNSETTLED, source=_SOURCE
         )
-    pending = await inbox.pending()
+    pending = await stores.inbox.pending()
     if isinstance(pending, Failure):
         return pending
-    due = await outbox.due()
+    due = await stores.outbox.due()
     if isinstance(due, Failure):
         return due
     waiting = (

@@ -44,6 +44,23 @@ def test_each_message_is_answered_and_the_driver_leaves_when_input_ends() -> Non
     asyncio.run(scenario())
 
 
+def test_a_failed_send_ends_the_driver_with_its_failure_and_the_reply_waits() -> None:
+    async def scenario() -> None:
+        clock = JumpingClock()
+        stores = Stores()
+        channel = ScriptedChannel(
+            first_and_second(), clock, one_at_a_time=True, fail_first_send=True
+        )
+        made = process(stores, channel, clock, CountingIds(), Counter())
+        failed = await chat(made, SPEC)
+        assert isinstance(failed, Failure), failed
+        result = await outcome(stores, channel)
+        # The reply stays in the outbox, for the next start to send again.
+        assert [out.text for out in result.due] == ["First answer."]
+
+    asyncio.run(scenario())
+
+
 def test_the_first_trip_sends_a_reply_a_kill_left_unsent() -> None:
     async def scenario() -> None:
         clock = JumpingClock()

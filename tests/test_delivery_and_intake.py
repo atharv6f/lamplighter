@@ -69,8 +69,11 @@ def test_a_failed_send_stops_and_the_next_call_sends_in_order() -> None:
         outbox = InMemoryOutbox(10_000)
         channel = FailingChannel()
         await enqueue(outbox, reply(3, text="First."), reply(7, text="Second."))
-        assert await deliver_due(SESSION, outbox, channel) is None
+        failed = await deliver_due(SESSION, outbox, channel)
+        assert isinstance(failed, Failure) and failed.kind == "unavailable", failed
         assert channel.sent == []
+        due = await outbox.due()
+        assert not isinstance(due, Failure) and len(due) == 2
         channel.down = False
         assert await deliver_due(SESSION, outbox, channel) is None
         assert [out.text for out in channel.sent] == ["First.", "Second."]

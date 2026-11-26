@@ -7,25 +7,36 @@ import sqlite3
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import TextIO
 
 import httpx
 
-from lamplighter.adapters import FileBlobStore, StubTools, SystemClock, SystemIds
+from lamplighter.adapters import (
+    FileBlobStore,
+    StubTools,
+    SystemClock,
+    SystemIds,
+    TerminalChannel,
+)
 from lamplighter.adapters.anthropic import AnthropicModel
 from lamplighter.adapters.sqlite import (
     SqliteEffectLedger,
     SqliteEventLog,
+    SqliteInbox,
+    SqliteOutbox,
     delete_session,
     export_session,
     hashes_in_use,
     open_database,
     store_sizes,
 )
-from lamplighter.app.chat import STORE_TIMEOUT_S, ChatParts, chat
+from lamplighter.app.chat import ChatParts, Stores, chat
 from lamplighter.app.config import Config, load_config
-from lamplighter.ports import Failure, ModelClient
+from lamplighter.ports import Clock, Failure, ModelClient, ToolProvider
 
 NO_KEY = "ANTHROPIC_API_KEY is not set."
+# How long a write waits for another process that holds the store's lock.
+STORE_TIMEOUT_S = 5.0
 
 
 def build_model(config: Config, api_key: str) -> ModelClient:
@@ -83,17 +94,47 @@ def _chat(config: Config, session_id: str | None) -> int:
     if not key:
         print(NO_KEY, file=sys.stderr)
         return 1
-    clock = SystemClock()
-    parts = ChatParts(
-        model=build_model(config, key),
-        tools=StubTools(clock),
-        clock=clock,
-        ids=SystemIds(),
-        reader=sys.stdin.fileno(),
-        writer=sys.stdout,
-        errors=sys.stderr,
-    )
+    model = build_model(config, key)
+    tools = StubTools(SystemClock())
+    parts = chat_parts(config, model, tools, sys.stdin.fileno(), sys.stdout, sys.stderr)
     return chat(config, session_id, parts)
+
+
+def chat_parts(
+    config: Config,
+    model: ModelClient,
+    tools: ToolProvider,
+    reader: int,
+    writer: TextIO,
+    errors: TextIO,
+) -> ChatParts:
+    """Build a chat on the SQLite store and a terminal that reads `reader`."""
+    clock = SystemClock()
+    ids = SystemIds()
+
+    def open_stores(folder: Path) -> Stores | Failure:
+        return sqlite_stores(folder, config.store.max_record_bytes, clock)
+
+    def terminal(session_id: str) -> TerminalChannel:
+        return TerminalChannel(session_id, clock, ids, reader, writer)
+
+    return ChatParts(model, tools, clock, ids, open_stores, terminal, writer, errors)
+
+
+def sqlite_stores(
+    folder: Path, max_record_bytes: int, clock: Clock
+) -> Stores | Failure:
+    """Open the store file in `folder`, and build the stores a chat uses on it."""
+    connection = open_database(folder / "state.db", STORE_TIMEOUT_S)
+    if isinstance(connection, Failure):
+        return connection
+    return Stores(
+        log=SqliteEventLog(connection, {}, max_record_bytes),
+        inbox=SqliteInbox(connection, max_record_bytes),
+        outbox=SqliteOutbox(connection, clock, max_record_bytes),
+        ledger=SqliteEffectLedger(connection, clock, max_record_bytes),
+        close=connection.close,
+    )
 
 
 async def _store_command(

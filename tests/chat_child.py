@@ -28,11 +28,11 @@ from lamplighter.adapters import (
     ScriptedTools,
     StubTools,
     SystemClock,
-    SystemIds,
 )
 from lamplighter.adapters.sqlite import SqliteEventLog, SqliteInbox, open_database
-from lamplighter.app.chat import ChatParts, chat
+from lamplighter.app.chat import chat
 from lamplighter.app.config import Config, load_config
+from lamplighter.app.main import chat_parts
 from lamplighter.ports import (
     Failure,
     Inbound,
@@ -267,16 +267,16 @@ def main() -> int:
         send_next_group(folder, groups)
     clock = SystemClock()
     tools = stubborn_tools() if acts.stubborn else StubTools(clock)
-    parts = ChatParts(
-        model=ModelByRequest(numbered(acts.choose), clock, acts.model_seconds),
-        tools=RecordedTools(tools, folder / STARTED),
-        clock=clock,
-        ids=SystemIds(),
-        reader=sys.stdin.fileno(),
-        writer=sys.stdout,
-        errors=sys.stderr,
+    config = config_for(folder, acts.cancel_bound_ms)
+    parts = chat_parts(
+        config,
+        ModelByRequest(numbered(acts.choose), clock, acts.model_seconds),
+        RecordedTools(tools, folder / STARTED),
+        sys.stdin.fileno(),
+        sys.stdout,
+        sys.stderr,
     )
-    return chat(config_for(folder, acts.cancel_bound_ms), session, parts)
+    return chat(config, session, parts)
 
 
 if __name__ == "__main__":

@@ -82,7 +82,7 @@ def first_open(history: History) -> object:
     return view(history).open_calls[0]
 
 
-# Row 1
+# A pending message that is already in the log.
 
 
 def test_a_message_already_in_the_log_is_routed_to_its_seq() -> None:
@@ -97,7 +97,7 @@ def test_routing_comes_before_a_stop_and_before_starting_anything() -> None:
     assert move(history, rows) == FinishRouting(((8, 3),))
 
 
-# Rows 2 to 4
+# No open run: idle, drop the stops, or start a run.
 
 
 def test_with_no_run_and_no_row_there_is_nothing_to_do() -> None:
@@ -133,7 +133,7 @@ def test_with_no_run_the_messages_at_the_front_start_one() -> None:
     assert move(done, rows) == StartRun(rows[:2], new_session=False)
 
 
-# Row 5
+# A run with an ending is closed.
 
 
 def test_a_saved_ending_closes_the_run_and_uses_up_every_pending_stop() -> None:
@@ -149,7 +149,7 @@ def test_a_saved_ending_closes_the_run_and_uses_up_every_pending_stop() -> None:
     assert closed.stops == (rows[0], rows[2])
 
 
-# Row 6
+# A call that was in flight when a process died.
 
 
 def test_a_call_with_an_intent_and_no_result_is_answered_interrupted() -> None:
@@ -162,7 +162,7 @@ def test_a_call_with_an_intent_and_no_result_is_answered_interrupted() -> None:
     assert answered.call.call.id == "call_a"
 
 
-# Row 7 and "what a reply leads to"
+# No call is open, and the newest reply ended the run.
 
 
 def test_a_whole_text_reply_ends_the_run_done_with_its_visible_text() -> None:
@@ -284,7 +284,7 @@ def test_a_lost_model_call_is_asked_again() -> None:
     assert move(history) == CallModel()
 
 
-# Rows 8 to 10
+# Changed settings, a pending stop, and the time limit with a call open.
 
 
 def test_a_run_opened_under_other_settings_ends_config_changed() -> None:
@@ -310,7 +310,7 @@ def test_an_open_call_with_the_time_used_up_ends_the_run_on_the_limit() -> None:
     )
 
 
-# Rows 11 to 15
+# The first open call: a repeat, a cut, bad arguments, no such tool, or run it.
 
 
 def test_an_open_call_made_after_the_warning_ends_the_run() -> None:
@@ -359,7 +359,7 @@ def test_an_open_call_is_run() -> None:
     assert ran.call.call == call("call_a")
 
 
-# Rows 16 to 18
+# Nothing open: a limit, the pending messages, or the model.
 
 
 def test_a_limit_ends_the_run_before_another_model_call() -> None:

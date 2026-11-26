@@ -1,8 +1,8 @@
 """Picks the one next move of a session from its view and its waiting messages.
 
-The move table has eighteen rows, and the first whose condition holds wins.
-Rows that finish something a kill may have cut in half come before every
-row that ends a run, and a stop comes before every row that spends.
+The checks run in a fixed order, and the first whose condition holds wins.
+Checks that finish something a kill may have cut in half come before every
+check that ends a run, and a stop comes before every check that spends.
 """
 
 from collections.abc import Sequence

@@ -35,6 +35,8 @@ async def run_call(
     bound has that result saved.
     """
     part = call.call
+    if part.arguments is None:
+        raise ValueError("a call whose arguments did not parse is never run")
     intent = in_run(
         view,
         utc_text(deps.clock.now()),
@@ -45,8 +47,6 @@ async def run_call(
     intent_seq = await deps.log.append(session_id, (intent,), view.last_seq)
     if isinstance(intent_seq, Failure):
         return intent_seq
-    if part.arguments is None:
-        raise ValueError("a call whose arguments did not parse is never run")
     run_id = open_run_id(view)
     started = ToolCallStarted(session_id, run_id, view.step, part)
     await notify(deps.observers.before_tool, started, deps.clock)

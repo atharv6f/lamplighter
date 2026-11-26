@@ -126,7 +126,7 @@ def ends(ran: Ran, reason: str, detail: str, text: str) -> None:
     }
 
 
-# Rule 1: arguments that are not JSON.
+# Arguments that are not JSON.
 
 
 def test_arguments_that_did_not_parse_are_answered_and_not_run() -> None:
@@ -146,7 +146,7 @@ def test_arguments_that_did_not_parse_are_answered_and_not_run() -> None:
     ends(ran, "done", "", "All done.")
 
 
-# Rule 2: a tool that does not exist.
+# A tool that does not exist.
 
 
 def test_a_tool_that_does_not_exist_is_answered_with_the_real_names() -> None:
@@ -165,7 +165,7 @@ def test_a_tool_that_does_not_exist_is_answered_with_the_real_names() -> None:
     ends(ran, "done", "", "All done.")
 
 
-# Rule 3: the same call with the same result, again and again.
+# The same call with the same result, again and again.
 
 
 def test_one_repeat_per_reply_is_warned_on_the_third_and_ended_on_the_fourth() -> None:
@@ -260,7 +260,7 @@ def test_the_warning_is_left_out_when_results_are_compared() -> None:
     assert ran.model_calls == 4
 
 
-# Rule 4: an empty reply.
+# An empty reply.
 
 
 def test_an_empty_reply_is_asked_again_with_a_note() -> None:
@@ -310,7 +310,7 @@ def test_a_refused_reply_ends_the_run() -> None:
     ends(ran, "failed", "refused", harness_texts.REFUSED_NOTICE)
 
 
-# Rule 5: a model call that fails.
+# A model call that fails.
 
 
 def test_a_call_that_failed_after_part_of_the_reply_is_asked_once_more() -> None:
