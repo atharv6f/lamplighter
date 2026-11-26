@@ -134,12 +134,14 @@ def note_tools(clock: Clock, seconds: float = 0.0) -> ScriptedTools:
     async def note(arguments: JsonObject) -> ToolResult:
         if seconds:
             await clock.sleep(seconds)
-        return ToolResult(text=f"Noted {arguments.get('n')}.", is_error=False)
+        return ToolResult(
+            text=f"Noted {arguments.get('n')}.", is_error=False, effect="none"
+        )
 
     async def tick(arguments: JsonObject) -> ToolResult:
         del arguments
         ticks[0] += 1
-        return ToolResult(text=f"Tick {ticks[0]}.", is_error=False)
+        return ToolResult(text=f"Tick {ticks[0]}.", is_error=False, effect="none")
 
     return ScriptedTools([ScriptedTool(NOTE_SPEC, note), ScriptedTool(TICK_SPEC, tick)])
 

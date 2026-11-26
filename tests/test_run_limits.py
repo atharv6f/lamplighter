@@ -250,7 +250,9 @@ def test_a_message_waiting_at_a_limit_starts_the_next_run() -> None:
 
         async def note_and_hear(arguments: JsonObject) -> ToolResult:
             await loops[0].inbox.accept(inbound("n2", "And one more."))
-            return ToolResult(text=f"Noted {arguments['n']}.", is_error=False)
+            return ToolResult(
+                text=f"Noted {arguments['n']}.", is_error=False, effect="none"
+            )
 
         tools = ScriptedTools([ScriptedTool(NOTE_SPEC, note_and_hear)])
         loop = in_memory(model, clock, tools)

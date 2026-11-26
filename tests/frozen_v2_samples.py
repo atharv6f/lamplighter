@@ -68,18 +68,20 @@ class _World:
                 # A stop comes in while this note runs, so the next is not run.
                 await self.inbox.accept(stop("s1"))
                 self.running.ask_stop("sess-a")
-            return ToolResult(text=f"Noted {arguments.get('n')}.", is_error=False)
+            return ToolResult(
+                text=f"Noted {arguments.get('n')}.", is_error=False, effect="none"
+            )
 
         async def tick(arguments: JsonObject) -> ToolResult:
             del arguments
-            return ToolResult(text="Tick.", is_error=False)
+            return ToolResult(text="Tick.", is_error=False, effect="none")
 
         async def wait(arguments: JsonObject) -> ToolResult:
             del arguments
             if not self.killed_once:
                 self.killed_once = True
                 raise Killed
-            return ToolResult(text="Waited.", is_error=False)
+            return ToolResult(text="Waited.", is_error=False, effect="none")
 
         return ScriptedTools(
             [

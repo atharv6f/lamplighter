@@ -33,10 +33,11 @@ from lamplighter.ports import (
     Inbound,
     JsonObject,
     ModelClient,
+    Plan,
     Sender,
+    ToolEntry,
     ToolProvider,
     ToolResult,
-    ToolSpec,
     utc_text,
 )
 
@@ -89,7 +90,7 @@ class DiesInFirstCall:
         self._inner = inner
         self.died = False
 
-    def list_tools(self) -> tuple[ToolSpec, ...]:
+    def list_tools(self) -> tuple[ToolEntry, ...]:
         return self._inner.list_tools()
 
     async def call(self, name: str, arguments: JsonObject) -> ToolResult | Failure:
@@ -97,6 +98,19 @@ class DiesInFirstCall:
             self.died = True
             raise Killed
         return await self._inner.call(name, arguments)
+
+    async def plan(
+        self, name: str, arguments: JsonObject
+    ) -> Plan | ToolResult | Failure:
+        return await self._inner.plan(name, arguments)
+
+    async def apply(
+        self, name: str, arguments: JsonObject, plan: Plan
+    ) -> ToolResult | Failure:
+        return await self._inner.apply(name, arguments, plan)
+
+    async def check(self, probe: JsonObject) -> bool | None:
+        return await self._inner.check(probe)
 
 
 class SaysMoreDuringFirstCall:
@@ -108,7 +122,7 @@ class SaysMoreDuringFirstCall:
         self._more = more
         self.said = False
 
-    def list_tools(self) -> tuple[ToolSpec, ...]:
+    def list_tools(self) -> tuple[ToolEntry, ...]:
         return self._inner.list_tools()
 
     async def call(self, name: str, arguments: JsonObject) -> ToolResult | Failure:
@@ -118,6 +132,19 @@ class SaysMoreDuringFirstCall:
             running = RunningSessions()
             await take(self._more, self._inbox, channel, running, lambda: None)
         return await self._inner.call(name, arguments)
+
+    async def plan(
+        self, name: str, arguments: JsonObject
+    ) -> Plan | ToolResult | Failure:
+        return await self._inner.plan(name, arguments)
+
+    async def apply(
+        self, name: str, arguments: JsonObject, plan: Plan
+    ) -> ToolResult | Failure:
+        return await self._inner.apply(name, arguments, plan)
+
+    async def check(self, probe: JsonObject) -> bool | None:
+        return await self._inner.check(probe)
 
 
 def chat(

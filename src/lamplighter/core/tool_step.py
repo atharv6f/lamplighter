@@ -122,6 +122,7 @@ def _tool_result(
         outcome = ToolResult(
             text=harness_texts.tool_failed(name, outcome.kind, outcome.message),
             is_error=True,
+            effect="none",
         )
     text = _maybe_warned(view, call, outcome.text)
     return {"call_id": call.call.id, "text": text, "is_error": outcome.is_error}

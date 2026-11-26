@@ -27,11 +27,12 @@ from lamplighter.ports import (
     NewEvent,
     Outbound,
     Outbox,
+    Plan,
     SessionInfo,
     SessionState,
+    ToolEntry,
     ToolProvider,
     ToolResult,
-    ToolSpec,
 )
 
 type When = Literal["before", "after"]
@@ -169,13 +170,30 @@ class CountedTools:
     def __init__(self, inner: ToolProvider, counter: Counter) -> None:
         self.inner, self.counter = inner, counter
 
-    def list_tools(self) -> tuple[ToolSpec, ...]:
+    def list_tools(self) -> tuple[ToolEntry, ...]:
         return self.inner.list_tools()
 
     async def call(self, name: str, arguments: JsonObject) -> ToolResult | Failure:
         return await self.counter.around(
             f"tools.call {name}", lambda: self.inner.call(name, arguments)
         )
+
+    async def plan(
+        self, name: str, arguments: JsonObject
+    ) -> Plan | ToolResult | Failure:
+        return await self.counter.around(
+            f"tools.plan {name}", lambda: self.inner.plan(name, arguments)
+        )
+
+    async def apply(
+        self, name: str, arguments: JsonObject, plan: Plan
+    ) -> ToolResult | Failure:
+        return await self.counter.around(
+            f"tools.apply {name}", lambda: self.inner.apply(name, arguments, plan)
+        )
+
+    async def check(self, probe: JsonObject) -> bool | None:
+        return await self.counter.around("tools.check", lambda: self.inner.check(probe))
 
 
 class CountedChannel:

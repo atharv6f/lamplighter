@@ -2,6 +2,7 @@
 
 from lamplighter.adapters.counting_ids import CountingIds
 from lamplighter.adapters.file_blob_store import BlobTotals, FileBlobStore
+from lamplighter.adapters.made_up_world import MadeUpWorld, WorldTools
 from lamplighter.adapters.recorded_model import RecordingModel, ReplayedModel
 from lamplighter.adapters.scripted_channel import ScriptedChannel
 from lamplighter.adapters.scripted_model import (
@@ -21,6 +22,8 @@ from lamplighter.adapters.terminal import TerminalChannel
 
 __all__ = [
     "CountingIds",
+    "MadeUpWorld",
+    "WorldTools",
     "ScriptedChannel",
     "ScriptedTool",
     "ScriptedTools",

@@ -223,7 +223,12 @@ def run_spec(config: Config, tools: ToolProvider) -> RunSpec:
     """Build the spec every run of this process keeps, with its config id."""
     run = config.run
     return RunSpec(
-        config_id=config_id(config.model, config.prices, run, tools.list_tools()),
+        config_id=config_id(
+            config.model,
+            config.prices,
+            run,
+            tuple(entry.spec for entry in tools.list_tools()),
+        ),
         system=run.system,
         max_steps=run.max_steps,
         max_seconds=run.max_seconds,

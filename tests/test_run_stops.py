@@ -59,8 +59,12 @@ def long_note(seconds: float, after_cancel: float | None = None) -> ScriptedTool
             if after_cancel is None:
                 raise
             await clock.sleep(after_cancel)
-            return ToolResult(text="Noted, just in time.", is_error=False)
-        return ToolResult(text=f"Noted {arguments.get('n')}.", is_error=False)
+            return ToolResult(
+                text="Noted, just in time.", is_error=False, effect="none"
+            )
+        return ToolResult(
+            text=f"Noted {arguments.get('n')}.", is_error=False, effect="none"
+        )
 
     return ScriptedTool(NOTE_SPEC, run)
 

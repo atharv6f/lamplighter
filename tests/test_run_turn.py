@@ -181,7 +181,7 @@ def test_the_model_sees_each_result_and_the_tool_list() -> None:
         assert len(model.requests) == 3
         first = model.requests[0]
         assert first.system == (SPEC.system,)
-        assert first.tools == loop.tools.list_tools()
+        assert first.tools == tuple(e.spec for e in loop.tools.list_tools())
         assert first.max_output == SPEC.model_max_output
         assert first.retries == SPEC.model_retries
         assert first.cache_hints == ()
@@ -427,7 +427,7 @@ def test_a_message_during_a_run_joins_the_next_request_after_the_results() -> No
         async def wait_and_hear(arguments: JsonObject) -> ToolResult:
             del arguments
             await ask(loop_box[0], "n2", LATE)
-            return ToolResult(text="Waited.", is_error=False)
+            return ToolResult(text="Waited.", is_error=False, effect="none")
 
         def one_wait(request: ModelRequest) -> ScriptedReply:
             if assistant_turns(request) == 0:

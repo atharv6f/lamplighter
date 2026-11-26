@@ -159,7 +159,9 @@ def last_said(request: ModelRequest) -> tuple[str, int]:
 def _tools(world: World, arrive: "Arrival") -> ScriptedTools:
     async def note(arguments: JsonObject) -> ToolResult:
         world.started.append(("note", canonical_json(arguments)))
-        return ToolResult(text=f"Noted {arguments.get('n')}.", is_error=False)
+        return ToolResult(
+            text=f"Noted {arguments.get('n')}.", is_error=False, effect="none"
+        )
 
     ticks = [0]
 
@@ -167,7 +169,9 @@ def _tools(world: World, arrive: "Arrival") -> ScriptedTools:
         world.started.append(("tick", canonical_json(arguments)))
         ticks[0] += 1
         return ToolResult(
-            text=f"Tick {ticks[0]} of process {world.processes}.", is_error=False
+            text=f"Tick {ticks[0]} of process {world.processes}.",
+            is_error=False,
+            effect="none",
         )
 
     async def wait(arguments: JsonObject) -> ToolResult:
@@ -176,7 +180,9 @@ def _tools(world: World, arrive: "Arrival") -> ScriptedTools:
         seconds = arguments.get("seconds")
         assert isinstance(seconds, int)
         await world.clock.sleep(seconds)
-        return ToolResult(text=f"Waited {seconds} seconds.", is_error=False)
+        return ToolResult(
+            text=f"Waited {seconds} seconds.", is_error=False, effect="none"
+        )
 
     return ScriptedTools(
         [ScriptedTool(NOTE, note), ScriptedTool(TICK, tick), ScriptedTool(WAIT, wait)]

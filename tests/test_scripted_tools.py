@@ -11,7 +11,7 @@ def napping(clock: WaitingClock, ignores_cancel: bool) -> ScriptedTools:
     async def nap(arguments: JsonObject) -> ToolResult:
         del arguments
         await clock.sleep(60)
-        return ToolResult(text="rested", is_error=False)
+        return ToolResult(text="rested", is_error=False, effect="none")
 
     return ScriptedTools([ScriptedTool(SPEC, nap, ignores_cancel=ignores_cancel)])
 
@@ -25,7 +25,7 @@ def test_a_finished_call_is_noted_as_started_and_finished() -> None:
         assert tools.started == (ToolCallNote("nap", {"for": 1}),)
         assert tools.finished == ()
         await clock.advance(60)
-        assert task.result() == ToolResult(text="rested", is_error=False)
+        assert task.result() == ToolResult(text="rested", is_error=False, effect="none")
         return tools
 
     tools = asyncio.run(scene())
@@ -58,7 +58,7 @@ def test_a_tool_that_ignores_the_cancel_runs_on_to_its_end() -> None:
         await settle()
         assert not task.done()
         await clock.advance(60)
-        assert task.result() == ToolResult(text="rested", is_error=False)
+        assert task.result() == ToolResult(text="rested", is_error=False, effect="none")
         assert len(tools.finished) == 1
 
     asyncio.run(scene())

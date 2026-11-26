@@ -87,7 +87,13 @@ from lamplighter.ports.outbox_check import (
 )
 from lamplighter.ports.plain import from_plain, from_stored, to_plain
 from lamplighter.ports.request_check import check_request
-from lamplighter.ports.tool_provider import ToolProvider, ToolResult
+from lamplighter.ports.tool_provider import (
+    Plan,
+    ToolEffect,
+    ToolEntry,
+    ToolProvider,
+    ToolResult,
+)
 from lamplighter.ports.upcast import upcast
 from lamplighter.ports.value_rules import is_hash, is_id
 
@@ -97,6 +103,9 @@ __all__ = [
     "check_enqueue",
     "Outbox",
     "out_id_for",
+    "Plan",
+    "ToolEffect",
+    "ToolEntry",
     "ToolResult",
     "ToolProvider",
     "Outbound",

@@ -69,7 +69,7 @@ async def run_turn(
 async def _passes(
     session_id: str, spec: RunSpec, deps: Deps
 ) -> TurnEnd | Failure | None:
-    tools = deps.tools.list_tools()
+    tools = tuple(entry.spec for entry in deps.tools.list_tools())
     tool_names = frozenset(tool.name for tool in tools)
     events: list[Event] = []
     while True:

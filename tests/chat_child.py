@@ -38,11 +38,12 @@ from lamplighter.ports import (
     Inbound,
     JsonObject,
     ModelRequest,
+    Plan,
     TextPart,
     ToolCallPart,
+    ToolEntry,
     ToolProvider,
     ToolResult,
-    ToolSpec,
     Usage,
     canonical_json,
 )
@@ -183,7 +184,7 @@ class RecordedTools:
         self._inner = inner
         self._record = record
 
-    def list_tools(self) -> tuple[ToolSpec, ...]:
+    def list_tools(self) -> tuple[ToolEntry, ...]:
         return self._inner.list_tools()
 
     async def call(self, name: str, arguments: JsonObject) -> ToolResult | Failure:
@@ -195,16 +196,31 @@ class RecordedTools:
             os.close(held)
         return await self._inner.call(name, arguments)
 
+    async def plan(
+        self, name: str, arguments: JsonObject
+    ) -> Plan | ToolResult | Failure:
+        return await self._inner.plan(name, arguments)
+
+    async def apply(
+        self, name: str, arguments: JsonObject, plan: Plan
+    ) -> ToolResult | Failure:
+        return await self._inner.apply(name, arguments, plan)
+
+    async def check(self, probe: JsonObject) -> bool | None:
+        return await self._inner.check(probe)
+
 
 def stubborn_tools() -> ScriptedTools:
     """Give `wait`, which goes on to its end when it is cancelled."""
-    spec = StubTools(SystemClock()).list_tools()[1]
+    spec = StubTools(SystemClock()).list_tools()[1].spec
 
     async def wait(arguments: JsonObject) -> ToolResult:
         seconds = arguments.get("seconds")
         assert isinstance(seconds, int)
         await asyncio.sleep(seconds)
-        return ToolResult(text=f"Waited {seconds} seconds.", is_error=False)
+        return ToolResult(
+            text=f"Waited {seconds} seconds.", is_error=False, effect="none"
+        )
 
     return ScriptedTools([ScriptedTool(spec, wait, ignores_cancel=True)])
 
