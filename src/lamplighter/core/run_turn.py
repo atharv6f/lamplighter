@@ -72,7 +72,6 @@ async def _passes(
     session_id: str, spec: RunSpec, deps: Deps
 ) -> TurnEnd | Failure | None:
     entries = {entry.spec.name: entry for entry in deps.tools.list_tools()}
-    tool_names = frozenset(entries)
     events: list[Event] = []
     while True:
         # Cleared before the inbox is read: a stop saved before this finds
@@ -90,7 +89,7 @@ async def _passes(
         view = view_of(events)
         if isinstance(view, Failure):
             return view
-        move = next_move(view, rows, spec, tool_names)
+        move = next_move(view, rows, spec, entries)
         if isinstance(move, Idle):
             return None
         if isinstance(move, CloseRun):

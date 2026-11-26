@@ -1,6 +1,8 @@
 """The move table and "what a reply leads to", one row at a time, as tables."""
 
 import dataclasses
+from collections.abc import Mapping
+from typing import Any
 
 import pytest
 
@@ -35,6 +37,7 @@ from lamplighter.ports import (
     Inbound,
     InboxEntry,
     TextPart,
+    ToolEntry,
     Usage,
 )
 from tests.model_samples import REASONING
@@ -64,8 +67,26 @@ def move(
     history: History,
     rows: tuple[InboxEntry, ...] = (),
     spec: RunSpec = SPEC,
+    entries: Mapping[str, ToolEntry] = TOOLS,
 ) -> Move:
-    return next_move(view(history), rows, spec, TOOLS)
+    return next_move(view(history), rows, spec, entries)
+
+
+def interrupted(answered: Move, call_id: str = "call_a") -> bool:
+    return (
+        isinstance(answered, AnswerCall)
+        and answered.harness == "interrupted"
+        and answered.call.call.id == call_id
+    )
+
+
+def read_cut_off(**reply: Any) -> History:
+    """A run whose read of `wait` has one intent and no result."""
+    history = History().start(config_id=reply.pop("config_id", SPEC.config_id))
+    history.request()
+    history.reply(call("call_a"), reason="tool_calls", **reply)
+    history.intent(call("call_a"), "read")
+    return history
 
 
 def ended(reason: str, detail: str, text: str, limit: LimitHit | None = None) -> EndRun:
@@ -160,6 +181,59 @@ def test_a_call_with_an_intent_and_no_result_is_answered_interrupted() -> None:
     assert isinstance(answered, AnswerCall)
     assert answered.harness == "interrupted"
     assert answered.call.call.id == "call_a"
+
+
+def test_a_read_with_one_intent_is_run_once_more() -> None:
+    history = read_cut_off()
+    again = move(history)
+    assert isinstance(again, RunCall)
+    assert again.call.call.id == "call_a"
+    assert [i.action_class for i in again.call.intents] == ["read"]
+
+
+def test_a_read_with_two_intents_is_answered_interrupted() -> None:
+    history = read_cut_off()
+    history.intent(call("call_a"), "read")
+    assert interrupted(move(history))
+
+
+def test_an_intent_with_no_class_is_answered_interrupted() -> None:
+    history = opened()
+    history.step_with(call("call_a"))
+    history.intent(call("call_a"))
+    assert interrupted(move(history))
+
+
+def test_a_read_is_not_run_again_with_a_stop_pending() -> None:
+    assert interrupted(move(read_cut_off(), (row(2, stop("s2")),)))
+
+
+def test_a_read_is_not_run_again_under_changed_settings() -> None:
+    assert interrupted(move(read_cut_off(config_id="d" * 64)))
+
+
+def test_a_read_is_not_run_again_once_the_time_is_up() -> None:
+    assert interrupted(move(read_cut_off(duration_ms=1_200_000)))
+
+
+def test_a_read_is_not_run_again_when_the_tool_is_now_a_change() -> None:
+    changed = {
+        **TOOLS,
+        "wait": dataclasses.replace(TOOLS["wait"], action_class="irreversible"),
+    }
+    assert interrupted(move(read_cut_off(), entries=changed))
+
+
+def test_a_read_is_not_run_again_when_the_tool_is_gone() -> None:
+    gone = {name: entry for name, entry in TOOLS.items() if name != "wait"}
+    assert interrupted(move(read_cut_off(), entries=gone))
+
+
+def test_a_call_whose_intent_has_another_class_is_not_run_again() -> None:
+    history = opened()
+    history.step_with(call("call_a"))
+    history.intent(call("call_a"), "irreversible")
+    assert interrupted(move(history))
 
 
 # No call is open, and the newest reply ended the run.
@@ -349,6 +423,32 @@ def test_a_call_to_a_tool_that_does_not_exist_is_answered_so() -> None:
     answered = move(history)
     assert isinstance(answered, AnswerCall)
     assert answered.harness == "unknown_tool"
+
+
+def test_a_call_whose_arguments_do_not_fit_the_schema_is_answered_so() -> None:
+    history = opened()
+    history.step_with(call(seconds="5"))
+    answered = move(history)
+    assert isinstance(answered, AnswerCall)
+    assert answered.harness == "arguments_invalid"
+
+
+def test_arguments_that_do_not_fit_a_tool_that_does_not_exist_are_unknown_tool() -> (
+    None
+):
+    history = opened()
+    history.step_with(call(name="fly", seconds="5"))
+    answered = move(history)
+    assert isinstance(answered, AnswerCall)
+    assert answered.harness == "unknown_tool"
+
+
+def test_arguments_that_do_not_fit_with_a_stop_pending_end_the_run() -> None:
+    history = opened()
+    history.step_with(call(seconds="5"))
+    assert move(history, (row(2, stop("s2")),)) == ended(
+        "cancelled", "", STOPPED_NOTICE
+    )
 
 
 def test_an_open_call_is_run() -> None:

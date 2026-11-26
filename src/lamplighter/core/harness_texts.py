@@ -10,6 +10,7 @@ from typing import Literal
 type HarnessKind = Literal[
     "arguments_unparsed",
     "unknown_tool",
+    "arguments_invalid",
     "cut_off",
     "interrupted",
     "stopped",
@@ -37,6 +38,14 @@ def unknown_tool(name: str, tool_names: Sequence[str]) -> str:
     return f"There is no tool named {name}. The tools are: {names}."
 
 
+def arguments_invalid(name: str, problems: Sequence[str]) -> str:
+    """Tell the model its arguments for a call do not fit the tool's schema."""
+    return (
+        f"The arguments for {name} do not fit its schema: {'; '.join(problems)}."
+        " Send the call again with arguments that fit."
+    )
+
+
 def cut_off(name: str) -> str:
     """Tell the model a call was cut by the output limit and was not run."""
     return (
@@ -47,11 +56,15 @@ def cut_off(name: str) -> str:
 
 
 def interrupted(name: str) -> str:
-    """Tell the model a call was running when the harness stopped."""
+    """Tell the model a call was cut off before its result was saved.
+
+    The run may have been cut off by a kill or by a store that failed, so
+    the sentence names neither.
+    """
     return (
-        f"The harness was stopped while {name} was running, and the call was not run"
-        " again. Its outcome is unknown: it may have finished, partly run, or not"
-        " run at all."
+        f"The run was cut off before the result of {name} was saved, and the call"
+        " was not run again. Its outcome is unknown: it may have finished, partly"
+        " run, or not run at all."
     )
 
 

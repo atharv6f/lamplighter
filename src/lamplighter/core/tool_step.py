@@ -8,6 +8,7 @@ wrapper around text from outside this machine.
 import json
 
 from lamplighter.core import harness_texts
+from lamplighter.core.arguments_check import problems
 from lamplighter.core.event_types import TOOL_INTENT, TOOL_RESULT
 from lamplighter.core.harness_texts import HarnessKind, with_repeat_warning
 from lamplighter.core.interruptible import CutShort, Finished, NotStarted, interruptible
@@ -48,11 +49,11 @@ async def run_call(
 ) -> Failure | None:
     """Save `tool_intent`, run the tool, and save its result.
 
-    The intent is saved first, so after a kill the call is answered as
-    interrupted and never run a second time. A stop that is already known
-    keeps the tool from starting. A stop, or the end of the run's time, cuts
-    a running tool short. A tool that ends with a result inside the cancel
-    bound has that result saved.
+    The intent is saved first and carries the tool's class, so after a kill
+    a read may be run once more and anything else is never run again. A
+    stop that is already known keeps the tool from starting. A stop, or the
+    end of the run's time, cuts a running tool short. A tool that ends with
+    a result inside the cancel bound has that result saved.
     """
     part = call.call
     if part.arguments is None:
@@ -61,7 +62,7 @@ async def run_call(
         view,
         utc_text(deps.clock.now()),
         TOOL_INTENT,
-        {"call_id": part.id, "name": part.name},
+        {"call_id": part.id, "name": part.name, "action_class": entry.action_class},
         cause=call.reply_id,
     )
     intent_seq = await deps.log.append(session_id, (intent,), view.last_seq)
@@ -208,6 +209,10 @@ def _harness_text(
             return harness_texts.arguments_unparsed(name, call.call.parse_error or "")
         case "unknown_tool":
             return harness_texts.unknown_tool(name, [tool.name for tool in tools])
+        case "arguments_invalid":
+            (schema,) = [t.arguments_schema for t in tools if t.name == name]
+            found = problems(schema, call.call.arguments or {})
+            return harness_texts.arguments_invalid(name, found)
         case "cut_off":
             return harness_texts.cut_off(name)
         case "interrupted":

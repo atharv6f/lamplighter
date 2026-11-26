@@ -19,9 +19,16 @@ def test_the_texts_of_harness_results_are_pinned() -> None:
         " smaller steps."
     )
     assert texts.interrupted("wait") == (
-        "The harness was stopped while wait was running, and the call was not run"
-        " again. Its outcome is unknown: it may have finished, partly run, or not"
-        " run at all."
+        "The run was cut off before the result of wait was saved, and the call was"
+        " not run again. Its outcome is unknown: it may have finished, partly run,"
+        " or not run at all."
+    )
+    assert texts.arguments_invalid(
+        "write_file", ["content: is required", "path: must be a string, not null"]
+    ) == (
+        "The arguments for write_file do not fit its schema: content: is required;"
+        " path: must be a string, not null. Send the call again with arguments that"
+        " fit."
     )
     assert texts.stopped("wait") == (
         "wait was cut short because the user stopped the run. Its outcome is unknown."

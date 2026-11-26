@@ -467,10 +467,11 @@ def test_a_call_interrupted_again_and_again_is_warned_before_it_is_stopped() -> 
         tools = note_tools(clock)
         model = ModelByRequest(in_order(*(calls(note(f"c{n}")) for n in range(1, 5))))
         loop = in_memory(model, clock, tools)
-        loop.log = LosingResults(loop.log)
+        losing = LosingResults(loop.log)
+        loop.log = losing
         await loop.inbox.accept(inbound("n1", QUESTION))
         ended: object = None
-        for _ in range(10):
+        for _ in range(20):
             ended = await run_turn(SESSION, SPEC, loop.deps)
             if isinstance(ended, TurnEnd):
                 break
@@ -484,7 +485,10 @@ def test_a_call_interrupted_again_and_again_is_warned_before_it_is_stopped() -> 
             interrupted + WARNING,
             harness_texts.not_run("note"),
         ]
-        assert len(tools.started) == 3
+        # Each read is run once more after its result is lost, so each
+        # interruption takes two lost results.
+        assert len(tools.started) == 6
+        assert losing.lost == 6
         assert ended.reason == "failed"
         assert events[-1].payload == {"reason": "failed", "detail": "repeated_call"}
 

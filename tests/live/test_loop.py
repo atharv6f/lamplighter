@@ -90,19 +90,23 @@ class Chat:
     shown: list[str]
 
 
-class DiesInFirstCall:
-    """The stub tools, except that the first call dies part way, as a kill would."""
+class DiesInFirstTwoCalls:
+    """The stub tools, except that the first two calls die part way, as kills would.
+
+    A read cut off by a kill is run once more, so it takes two kills before
+    the loop answers the call itself.
+    """
 
     def __init__(self, inner: ToolProvider) -> None:
         self._inner = inner
-        self.died = False
+        self.died = 0
 
     def list_tools(self) -> tuple[ToolEntry, ...]:
         return self._inner.list_tools()
 
     async def call(self, name: str, arguments: JsonObject) -> ToolResult | Failure:
-        if not self.died:
-            self.died = True
+        if self.died < 2:
+            self.died += 1
             raise Killed
         return await self._inner.call(name, arguments)
 
@@ -195,10 +199,15 @@ def chat(
     async def run_all() -> tuple[Event, ...]:
         saved = await SqliteInbox(connection, limit).accept(first)
         assert not isinstance(saved, Failure), saved
-        try:
-            await one_process(tools or stub)
-        except Killed:
-            await one_process(stub)
+        # Each kill ends a process, and a new one carries on from the stores.
+        for _ in range(3):
+            try:
+                await one_process(tools or stub)
+                break
+            except Killed:
+                pass
+        else:
+            raise AssertionError("the chat was killed three times")
         events = await SqliteEventLog(connection, {}, limit).read(SESSION, 0)
         assert not isinstance(events, Failure), events
         return events
@@ -266,7 +275,7 @@ def test_a_call_cut_off_by_a_kill_is_answered_interrupted_and_the_api_accepts_it
 ) -> None:
     asked = typed("t1", "What is the time now in UTC? Use the tool.")
     done = chat(
-        tmp_path, config, client, asked, DiesInFirstCall(StubTools(SystemClock()))
+        tmp_path, config, client, asked, DiesInFirstTwoCalls(StubTools(SystemClock()))
     )
     ended_done_with_a_reply(done)
     harness = [r.payload.get("harness") for r in of_type(done, "tool_result")]

@@ -355,6 +355,11 @@ def _calls(events: Sequence[Event], started: Sequence[tuple[str, str]]) -> list[
     intents = Tally(
         str(e.payload["call_id"]) for e in events if e.type == "tool_intent"
     )
+    classes = {
+        str(e.payload["call_id"]): e.payload.get("action_class")
+        for e in events
+        if e.type == "tool_intent"
+    }
     results = Tally(
         str(e.payload["call_id"]) for e in events if e.type == "tool_result"
     )
@@ -366,15 +371,16 @@ def _calls(events: Sequence[Event], started: Sequence[tuple[str, str]]) -> list[
     for call_id in calls:
         if results[call_id] != 1:
             wrong.append(f"call {call_id} has {results[call_id]} results")
+    may_start: Tally[tuple[str, str]] = Tally()
     for call_id, count in intents.items():
-        if count > 1:
+        # A read may be run once more after a kill, behind a second intent.
+        if count > (2 if classes[call_id] == "read" else 1):
             wrong.append(f"call {call_id} has {count} intents")
         harness = answers.get(call_id)
         if harness is not None and harness not in INTERRUPTED_ANSWERS:
             wrong.append(f"call {call_id} had an intent and was answered {harness}")
-    may_start = Tally(
-        calls[call_id] for call_id in intents if answers.get(call_id) != "not_run"
-    )
+        # A call answered not_run was not started after its newest intent.
+        may_start[calls[call_id]] += count - (1 if harness == "not_run" else 0)
     for key, count in Tally(started).items():
         if count > may_start[key]:
             wrong.append(f"{key} started {count} times for {may_start[key]} intents")
