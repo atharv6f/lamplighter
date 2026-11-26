@@ -69,6 +69,10 @@ uv run pytest -m crash -s
 
 On a slow drive, `LAMPLIGHTER_KILL_WAIT_MS=5,400` gives each run longer before its kill.
 
+The chat has its own kill tests. In one process, a chat is killed just before and just after each of its calls to a store, the model, a tool or the channel, then started again, for twelve chats. After every kill each run has ended, each tool call has one result, no tool ran twice, each message is in the log once, and each reply was shown once, in order. Under `-m crash` the restart is killed too, at each of its calls. A second test kills the real `lamplighter chat` process with `kill -9` at random moments: ten times in `make check`, two hundred under `-m crash`.
+
+`uv run python -m scripts.chat_timing` times the chat on this machine: Ctrl-C to the prompt, the rebuild of a long session's transcript, and the longest line the terminal passes on. It calls no model.
+
 `uv run python scripts/commit_timing.py` prints how long a commit takes on this machine, with the Mac's full flush on and off. It writes only in a temporary folder.
 
 ## Live tests
