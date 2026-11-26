@@ -26,6 +26,7 @@ from lamplighter.ports.model import (
     UsageEvent,
 )
 from lamplighter.ports.plain import from_plain, to_plain
+from lamplighter.ports.request_check import check_request
 
 __all__ = [
     "CacheHint",
@@ -54,6 +55,7 @@ __all__ = [
     "ToolSpec",
     "Usage",
     "UsageEvent",
+    "check_request",
     "from_plain",
     "to_plain",
 ]

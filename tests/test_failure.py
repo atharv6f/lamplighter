@@ -1,7 +1,7 @@
 import pytest
-from model_samples import THROTTLED
 
 from lamplighter.ports import Failure, from_plain, to_plain
+from tests.model_samples import THROTTLED
 
 
 def test_a_wait_time_is_only_allowed_when_throttled() -> None:

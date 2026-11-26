@@ -2,9 +2,9 @@ import dataclasses
 import json
 
 import pytest
-from model_samples import RECORDS
 
 from lamplighter.ports import from_plain, to_plain
+from tests.model_samples import RECORDS
 
 
 def _name(record: object) -> str:

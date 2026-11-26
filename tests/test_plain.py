@@ -1,5 +1,4 @@
 import pytest
-from model_samples import REQUEST, TEXT, TOOL_CALL, USAGE
 
 from lamplighter.ports import (
     JsonValue,
@@ -11,6 +10,7 @@ from lamplighter.ports import (
     from_plain,
     to_plain,
 )
+from tests.model_samples import REQUEST, TEXT, TOOL_CALL, USAGE
 
 
 def _plain_object(record: object) -> dict[str, JsonValue]:
