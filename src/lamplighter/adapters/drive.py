@@ -3,6 +3,7 @@
 Shared by the adapters that write files of their own. It implements no port.
 """
 
+import errno
 import fcntl
 import os
 from pathlib import Path
@@ -49,3 +50,8 @@ def write_flushed(path: Path, data: bytes, flags: int = os.O_EXCL) -> None:
         flush(descriptor)
     finally:
         os.close(descriptor)
+
+
+def is_full(error: OSError) -> bool:
+    """Say whether an error means the drive, or this user's share of it, is full."""
+    return error.errno in (errno.ENOSPC, errno.EDQUOT)

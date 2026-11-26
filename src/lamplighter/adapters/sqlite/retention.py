@@ -13,7 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
-from lamplighter.adapters.drive import flush_folder, write_flushed
+from lamplighter.adapters.drive import flush_folder, is_full, write_flushed
+from lamplighter.adapters.sqlite.errors import damaged
 from lamplighter.adapters.sqlite.transaction import read, write
 from lamplighter.ports import (
     RUN_END,
@@ -124,6 +125,7 @@ class _SessionTexts:
     counts: dict[str, int]
     last_seq: int
     handles: tuple[BlobHandle, ...]
+    named: frozenset[str]
 
 
 async def export_session(
@@ -138,7 +140,9 @@ async def export_session(
     The rows are read in one transaction, so the copy is of one moment. Each
     blob is read through the port, so its hash is checked on the way. The
     manifest is written last, so a folder with a manifest holds a whole
-    export. Every file is forced to the drive.
+    export. Every file is forced to the drive. A row that names a stored
+    blob by its hash alone, without its handle, gives `needs_user` before
+    anything is written, because that blob could not be copied and checked.
     """
     if not is_id(session_id):
         return _invalid("The session id breaks the id rule.")
@@ -149,6 +153,17 @@ async def export_session(
         return rows
     if rows.last_seq == 0:
         return _invalid(f"There is no session {session_id}.")
+    bare = await _blobs_named_by_hash_alone(blobs, rows)
+    if isinstance(bare, Failure):
+        return bare
+    if bare:
+        return Failure(
+            kind="needs_user",
+            effect="none",
+            message=f"The session names the blob {bare[0]} by its hash alone, so"
+            " the export cannot copy it and check it. Nothing was written.",
+            source=_SOURCE,
+        )
     copied = await _write_export(blobs, folder, rows)
     if isinstance(copied, Failure):
         return copied
@@ -208,6 +223,8 @@ async def delete_session(
         if refused is not None:
             return refused
         now = _session_texts(c, session_id)
+        if isinstance(now, Failure):
+            return now
         hashes_now = {name: _sha256(text) for name, text in now.texts.items()}
         if hashes_now != exported.files_sha256:
             return Failure(
@@ -328,7 +345,7 @@ def _refusal(c: sqlite3.Connection, session_id: str) -> Failure | None:
     return None
 
 
-def _session_texts(c: sqlite3.Connection, session_id: str) -> _SessionTexts:
+def _session_texts(c: sqlite3.Connection, session_id: str) -> _SessionTexts | Failure:
     texts: dict[str, str] = {}
     counts: dict[str, int] = {}
     handles: dict[str, BlobHandle] = {}
@@ -336,7 +353,10 @@ def _session_texts(c: sqlite3.Connection, session_id: str) -> _SessionTexts:
     for name, sql in _SESSION_ROWS.items():
         cursor = c.execute(sql, (session_id,))
         columns = [description[0] for description in cursor.description]
-        rows = [_plain_row(columns, row) for row in cursor.fetchall()]
+        try:
+            rows = [_plain_row(columns, row) for row in cursor.fetchall()]
+        except ValueError:
+            return damaged(f"A row for {name} holds JSON that does not read.", _SOURCE)
         texts[name] = "".join(saved_json(row) + "\n" for row in rows)
         counts[name] = len(rows)
         for row in rows:
@@ -348,6 +368,7 @@ def _session_texts(c: sqlite3.Connection, session_id: str) -> _SessionTexts:
         counts=counts,
         last_seq=last_seq,
         handles=tuple(handles[sha256] for sha256 in sorted(handles)),
+        named=frozenset(_HEX_RUN.findall("".join(texts.values()))),
     )
 
 
@@ -381,6 +402,25 @@ def _is_handle(fields: dict[str, Any]) -> bool:
         and type(size) is int
         and isinstance(fields.get("media_type"), str)
     )
+
+
+async def _blobs_named_by_hash_alone(
+    blobs: BlobStore, rows: _SessionTexts
+) -> tuple[str, ...] | Failure:
+    # The sweep keeps a blob for any 64 hex characters in a row, so a blob a
+    # row names without its handle would be swept once the row is deleted.
+    # An export copies through a handle, for its size check, so it cannot
+    # take that blob, and must stop instead. Most such names, such as event
+    # ids, name no blob at all.
+    copied = {handle.sha256 for handle in rows.handles}
+    found: list[str] = []
+    for sha256 in sorted(rows.named - copied):
+        there = await blobs.exists(BlobHandle(sha256, 0, "application/octet-stream"))
+        if isinstance(there, Failure):
+            return there
+        if there:
+            found.append(sha256)
+    return tuple(found)
 
 
 async def _write_export(
@@ -430,10 +470,11 @@ def _refused(message: str) -> Failure:
 
 
 def _os_failure(error: OSError) -> Failure:
+    full = is_full(error)
     return Failure(
-        kind="fatal",
+        kind="unavailable" if full else "fatal",
         effect="none",
-        message="The export could not be written.",
+        message="The drive is full." if full else "The export could not be written.",
         source=_SOURCE,
         detail={"os_error": error.strerror or str(error)},
     )

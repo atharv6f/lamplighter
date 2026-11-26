@@ -1,6 +1,7 @@
 """Export, delete, the list of blob hashes in use, and the size report."""
 
 import dataclasses
+import errno
 import hashlib
 import json
 import sqlite3
@@ -151,6 +152,57 @@ def test_an_export_with_a_missing_blob_fails_and_writes_no_manifest(
     (store.folder / "blobs" / own).unlink()
     assert failure_of(store.export("sess-a", tmp_path / "out")).kind == "fatal"
     assert not (tmp_path / "out" / "manifest.json").exists()
+
+
+def test_a_blob_named_by_its_hash_alone_stops_the_delete_before_anything(
+    store: Store, tmp_path: Path
+) -> None:
+    # The sweep would keep it while the row lives, and remove it after the
+    # delete, so a blob the export cannot copy must stop the delete.
+    recipe = store.put(b"the file as it was")
+    undo = NewEvent(type="note", v=1, payload={"blob": recipe.sha256}, at=AT)
+    store.append("sess-c", undo)
+    failure = failure_of(store.delete("sess-c", tmp_path / "out"))
+    assert (failure.kind, failure.effect) == ("needs_user", "none")
+    assert recipe.sha256 in failure.message
+    assert not (tmp_path / "out").exists()
+    assert len(events_in(store, "sess-c")) == 1
+
+
+def test_a_hash_that_names_no_blob_does_not_stop_an_export(
+    store: Store, tmp_path: Path
+) -> None:
+    named = NewEvent(type="note", v=1, payload={"cause": "c" * 64}, at=AT)
+    store.append("sess-c", named)
+    assert isinstance(store.export("sess-c", tmp_path / "out"), ExportReport)
+
+
+def test_a_row_whose_json_does_not_read_is_fatal_and_stops_the_delete(
+    store: Store, tmp_path: Path
+) -> None:
+    store.connection.execute(
+        "UPDATE events SET payload = '{not json' WHERE session_id = 'sess-b'"
+    )
+    failure = failure_of(store.delete("sess-b", tmp_path / "out"))
+    assert (failure.kind, failure.effect) == ("fatal", "none")
+    assert not (tmp_path / "out").exists()
+
+
+def test_a_full_drive_during_an_export_is_unavailable(
+    store: Store, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def full(*_: object, **__: object) -> None:
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr("lamplighter.adapters.sqlite.retention.write_flushed", full)
+    failure = failure_of(store.export("sess-a", tmp_path / "out"))
+    assert (failure.kind, failure.effect) == ("unavailable", "none")
+
+
+def events_in(store: Store, session_id: str) -> tuple[object, ...]:
+    events = run(store.log.read(session_id, 0))
+    assert not isinstance(events, Failure), events
+    return events
 
 
 def count(connection: sqlite3.Connection, sql: str) -> int:

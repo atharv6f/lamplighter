@@ -113,7 +113,12 @@ def test_two_opens_of_one_new_file_at_once_both_succeed_and_make_one_layout(
 
     def open_it() -> None:
         start.wait()
-        connection = open_database(path, 5)
+        # An error raised in a thread would otherwise only be a warning.
+        try:
+            connection = open_database(path, 5)
+        except BaseException as error:
+            results.append(error)
+            return
         results.append(connection)
         if isinstance(connection, sqlite3.Connection):
             connection.close()
@@ -123,7 +128,8 @@ def test_two_opens_of_one_new_file_at_once_both_succeed_and_make_one_layout(
         thread.start()
     for thread in threads:
         thread.join()
-    assert all(isinstance(result, sqlite3.Connection) for result in results)
+    assert len(results) == 2
+    assert all(isinstance(result, sqlite3.Connection) for result in results), results
     check = opened(path)
     (events_tables,) = check.execute(
         "SELECT count(*) FROM sqlite_schema WHERE name = 'events'"

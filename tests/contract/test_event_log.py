@@ -123,6 +123,25 @@ def test_an_append_that_is_not_at_the_end_is_a_conflict_and_writes_nothing(
     assert texts(events_of(run(log.read("sess-a", 0)))) == ["one", "two"]
 
 
+def test_a_stale_append_of_new_user_messages_is_a_conflict(log: EventLog) -> None:
+    # A user message carries its own id, so no id clash can stand in for the
+    # place check here: only the check on expected_seq refuses this batch.
+    run(log.append("sess-a", [note("one"), note("two")], 0))
+    failure = failure_of(run(log.append("sess-a", [user_message("msg-9")], 1)))
+    assert (failure.kind, failure.effect) == ("conflict", "none")
+    assert texts(events_of(run(log.read("sess-a", 0)))) == ["one", "two"]
+
+
+def test_a_payload_changed_by_its_caller_after_append_stays_as_saved(
+    log: EventLog,
+) -> None:
+    payload: JsonObject = {"text": "tea", "items": ["milk"]}
+    run(log.append("sess-a", [NewEvent(type="note", v=1, payload=payload, at=AT)], 0))
+    payload["text"] = "coffee"
+    saved = events_of(run(log.read("sess-a", 0)))[0]
+    assert saved.payload == {"text": "tea", "items": ["milk"]}
+
+
 def test_of_two_appends_with_one_expected_seq_exactly_one_wins(log: EventLog) -> None:
     run(log.append("sess-a", [note("one")], 0))
     first = run(log.append("sess-a", [note("two")], 1))

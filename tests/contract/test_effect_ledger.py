@@ -5,7 +5,7 @@ import dataclasses
 import math
 from collections.abc import Coroutine
 from datetime import timedelta
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -16,6 +16,7 @@ from lamplighter.ports import (
     EffectLedger,
     EffectResult,
     Failure,
+    JsonObject,
     Outcome,
 )
 from tests.contract.stores import MAX_RECORD_BYTES, Stores
@@ -89,6 +90,20 @@ def test_a_second_begin_of_one_action_finds_the_first_row(ledger: EffectLedger) 
     assert second.effect == first.effect
     assert second.effect.undo == UNDO_BEFORE
     assert len(effects(ledger)) == 1
+
+
+def test_a_second_begin_finds_the_first_row_when_the_args_hold_a_tuple(
+    ledger: EffectLedger,
+) -> None:
+    # A tuple is saved as a list, so the comparison must be with the action as
+    # it was saved, or a repeat of the same action would read as a conflict.
+    args = cast(JsonObject, {"lines": ("milk", "tea")})
+    with_tuple = dataclasses.replace(action(), args=args)
+    first = begun(run(ledger.begin(with_tuple, None, None)))
+    second = begun(run(ledger.begin(with_tuple, None, None)))
+    assert not second.is_new
+    assert second.effect == first.effect
+    assert second.effect.action.args == {"lines": ["milk", "tea"]}
 
 
 def test_a_begin_after_finish_gives_the_row_as_it_now_stands(

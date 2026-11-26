@@ -62,3 +62,22 @@ class FailingConnection:
 
     def executemany(self, sql: str, rows: Any) -> sqlite3.Cursor:
         return self._inner.executemany(sql, rows)
+
+
+class InterruptedConnection:
+    """Passes every call to a real connection, and raises an interrupt just
+    after one statement has run, as a second Ctrl-C can."""
+
+    def __init__(self, inner: sqlite3.Connection, statement: str) -> None:
+        self._inner = inner
+        self._statement = statement
+
+    @property
+    def in_transaction(self) -> bool:
+        return self._inner.in_transaction
+
+    def execute(self, sql: str, parameters: Any = ()) -> sqlite3.Cursor:
+        cursor = self._inner.execute(sql, parameters)
+        if sql == self._statement:
+            raise KeyboardInterrupt
+        return cursor

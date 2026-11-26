@@ -1,10 +1,12 @@
 """What the file blob store does beyond the port's contract tests."""
 
 import asyncio
+import fcntl
 import hashlib
 import os
 import stat
-from collections.abc import Coroutine
+import threading
+from collections.abc import Callable, Coroutine
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -129,6 +131,39 @@ def test_the_sweep_removes_old_leftovers_of_killed_puts(tmp_path: Path) -> None:
     assert not old.exists()
     assert fresh.exists()
     assert (tmp_path / ".lock").exists()
+
+
+def waits_for_the_lock(folder: Path, how: int, work: Callable[[], object]) -> None:
+    """Hold the folder's lock as `how`, and check that `work` waits for it."""
+    folder.mkdir(exist_ok=True)
+    descriptor = os.open(folder / ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+    done = threading.Event()
+
+    def in_thread() -> None:
+        work()
+        done.set()
+
+    try:
+        fcntl.flock(descriptor, how)
+        thread = threading.Thread(target=in_thread)
+        thread.start()
+        assert not done.wait(0.3), "the work did not wait for the lock"
+    finally:
+        os.close(descriptor)
+    thread.join(5)
+    assert done.is_set(), "the work never finished once the lock was free"
+
+
+def test_a_put_waits_while_the_sweep_holds_the_lock(tmp_path: Path) -> None:
+    store = FileBlobStore(tmp_path / "blobs", FakeClock(), 1_000)
+    waits_for_the_lock(tmp_path / "blobs", fcntl.LOCK_EX, lambda: put(store, LIST))
+
+
+def test_the_sweep_waits_while_a_put_holds_the_lock(tmp_path: Path) -> None:
+    store = FileBlobStore(tmp_path / "blobs", FakeClock(), 1_000)
+    waits_for_the_lock(
+        tmp_path / "blobs", fcntl.LOCK_SH, lambda: store.remove_unused(frozenset())
+    )
 
 
 def test_the_totals_count_only_blobs(tmp_path: Path) -> None:

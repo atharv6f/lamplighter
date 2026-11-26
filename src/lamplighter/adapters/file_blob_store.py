@@ -1,7 +1,6 @@
 """The blob store as one file per blob in a folder, named by the blob's hash."""
 
 import contextlib
-import errno
 import fcntl
 import hashlib
 import os
@@ -9,7 +8,7 @@ from collections.abc import Generator, Set
 from dataclasses import dataclass
 from pathlib import Path
 
-from lamplighter.adapters.drive import flush_folder, write_flushed
+from lamplighter.adapters.drive import flush_folder, is_full, write_flushed
 from lamplighter.ports import (
     BlobHandle,
     Clock,
@@ -146,7 +145,7 @@ def _is_unused(entry: os.DirEntry[str], in_use: Set[str], cutoff: float) -> bool
 
 
 def _os_failure(error: OSError) -> Failure:
-    full = error.errno in (errno.ENOSPC, errno.EDQUOT)
+    full = is_full(error)
     return Failure(
         kind="unavailable" if full else "fatal",
         effect="none",

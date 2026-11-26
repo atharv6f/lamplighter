@@ -1,8 +1,12 @@
 import math
+from typing import cast
 
 import pytest
 
 from lamplighter.ports import (
+    EffectResult,
+    JsonObject,
+    as_saved,
     canonical_json,
     read_saved_json,
     saved_json,
@@ -68,3 +72,12 @@ def test_the_saved_size_counts_bytes_and_not_characters() -> None:
 def test_text_that_is_not_json_is_refused_on_reading() -> None:
     with pytest.raises(ValueError):
         read_saved_json("{not json")
+
+
+def test_as_saved_gives_a_record_as_a_reader_of_its_saved_form_gets_it() -> None:
+    result = EffectResult(
+        outcome="done", output=cast(JsonObject, {"lines": ("milk", "tea")})
+    )
+    assert as_saved(EffectResult, result) == EffectResult(
+        outcome="done", output={"lines": ["milk", "tea"]}
+    )

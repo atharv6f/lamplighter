@@ -6,7 +6,12 @@ import pytest
 
 from lamplighter.adapters.sqlite.transaction import read, write
 from lamplighter.ports import Failure
-from tests.sqlite.helpers import FailingConnection, made_error, opened
+from tests.sqlite.helpers import (
+    FailingConnection,
+    InterruptedConnection,
+    made_error,
+    opened,
+)
 
 SOURCE = "EventLog/sqlite"
 INSERT = "INSERT INTO inbox (channel, native_id, inbound) VALUES (?, ?, '{}')"
@@ -62,6 +67,41 @@ def test_an_interrupt_inside_a_read_leaves_no_transaction(tmp_path: Path) -> Non
     with pytest.raises(KeyboardInterrupt):
         read(connection, SOURCE, body)
     assert not connection.in_transaction
+
+
+def test_an_interrupt_just_after_begin_lets_go_of_the_write_lock(
+    tmp_path: Path,
+) -> None:
+    inner = opened(tmp_path / "state.db")
+    connection = cast(
+        sqlite3.Connection, InterruptedConnection(inner, "BEGIN IMMEDIATE")
+    )
+    with pytest.raises(KeyboardInterrupt):
+        write(connection, SOURCE, lambda c: c.execute(INSERT, ("a", "1")).rowcount)
+    assert not inner.in_transaction
+    other = opened(tmp_path / "state.db", timeout_s=0.05)
+    assert write(other, SOURCE, lambda c: c.execute(INSERT, ("b", "1")).rowcount) == 1
+
+
+def test_an_interrupt_as_commit_returns_leaves_the_change_saved(
+    tmp_path: Path,
+) -> None:
+    inner = opened(tmp_path / "state.db")
+    connection = cast(sqlite3.Connection, InterruptedConnection(inner, "COMMIT"))
+    with pytest.raises(KeyboardInterrupt):
+        write(connection, SOURCE, lambda c: c.execute(INSERT, ("a", "1")).rowcount)
+    assert not inner.in_transaction
+    assert rows(opened(tmp_path / "state.db")) == 1
+
+
+def test_an_interrupt_just_after_a_read_begins_leaves_no_transaction(
+    tmp_path: Path,
+) -> None:
+    inner = opened(tmp_path / "state.db")
+    connection = cast(sqlite3.Connection, InterruptedConnection(inner, "BEGIN"))
+    with pytest.raises(KeyboardInterrupt):
+        read(connection, SOURCE, rows)
+    assert not inner.in_transaction
 
 
 def test_a_bug_in_a_body_is_raised_and_the_write_is_rolled_back(

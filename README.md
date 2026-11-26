@@ -44,7 +44,7 @@ uv run lamplighter store export SESSION FOLDER            # copy one session int
 uv run lamplighter store delete SESSION --export-to FOLDER  # export it, check the copy, then delete it
 ```
 
-`delete` always exports first. It refuses a session whose last run did not end or that has an action not yet settled.
+`delete` always exports first. It refuses a session whose last run did not end or that has an action not yet settled, and one that names a stored file by its hash alone, because the export could not copy that file.
 
 ## Crash tests
 

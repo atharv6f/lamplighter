@@ -45,7 +45,7 @@ def test_two_kinds_of_id_from_the_same_values_never_meet() -> None:
 
 def test_the_action_hash_example_follows_from_its_formula() -> None:
     # The function arrives with its first caller. Its formula is fixed now, so
-    # the example that every later layer relies on is pinned from day one.
+    # the example that every later caller relies on is pinned from day one.
     args = saved_json({"path": "notes.txt", "text": "tea"})
     listed = canonical_json(["action", "write_file", args, "file:notes.txt"])
     assert hashlib.sha256(listed.encode()).hexdigest() == (

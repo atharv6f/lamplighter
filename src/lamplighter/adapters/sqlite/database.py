@@ -6,6 +6,7 @@ import sqlite3
 import time
 from pathlib import Path
 
+from lamplighter.adapters.drive import is_full
 from lamplighter.adapters.sqlite.errors import failure_for
 from lamplighter.adapters.sqlite.transaction import read, write
 from lamplighter.ports import Failure
@@ -243,10 +244,13 @@ def _sqlite_failure(error: sqlite3.Error) -> Failure:
 
 
 def _os_failure(error: OSError) -> Failure:
+    full = is_full(error)
     return Failure(
-        kind="fatal",
+        kind="unavailable" if full else "fatal",
         effect="none",
-        message="The store's folder or file could not be made.",
+        message="The drive is full."
+        if full
+        else "The store's folder or file could not be made.",
         source=_SOURCE,
         detail={"os_error": error.strerror or str(error)},
     )
