@@ -77,7 +77,7 @@ The chat has its own kill tests. In one process, a chat is killed just before an
 
 ## Live tests
 
-Five tests call the real Anthropic API. They cost a little money, so `make check` leaves them out.
+Eight tests call the real Anthropic API. Three of them run the loop on a real store with the stub tools. They cost a little money, so `make check` leaves them out.
 
 Put your API key in a file named `.env` in this folder. Git ignores that file. It holds one line:
 

@@ -10,7 +10,7 @@ restart would be.
 import asyncio
 import contextlib
 from collections import Counter as Tally
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 
 from lamplighter.adapters import (
@@ -44,7 +44,7 @@ from lamplighter.ports import (
     canonical_json,
 )
 from tests.chat_kit import Outcome, Stores, outcome
-from tests.model_by_request import ModelByRequest, check_request
+from tests.model_by_request import Choose, ModelByRequest, check_request
 from tests.port_counter import (
     CountedChannel,
     CountedInbox,
@@ -114,7 +114,7 @@ class World:
     processes: int = 0
 
 
-def answers(script: dict[str, tuple[Turn, ...]]):  # noqa: ANN201 - a Choose
+def answers(script: Mapping[str, Sequence[Turn]]) -> Choose:
     """Pick a reply from the latest text the person wrote, and how many came after.
 
     The pick depends only on the request, so a request made again after a
