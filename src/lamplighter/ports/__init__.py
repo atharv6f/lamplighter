@@ -2,6 +2,19 @@
 
 from lamplighter.ports.clock import Clock, utc_text
 from lamplighter.ports.derived_ids import effect_key, event_id_for, inbound_event_id
+from lamplighter.ports.event_check import check_append, check_read, check_tail
+from lamplighter.ports.event_log import (
+    RUN_END,
+    RUN_STARTED,
+    USER_MESSAGE,
+    Event,
+    EventLog,
+    NewEvent,
+    SessionInfo,
+    SessionState,
+    Upcaster,
+    Upcasters,
+)
 from lamplighter.ports.failure import Failure, FailureEffect, FailureKind
 from lamplighter.ports.json_text import (
     canonical_json,
@@ -34,11 +47,14 @@ from lamplighter.ports.model import (
 )
 from lamplighter.ports.plain import from_plain, from_stored, to_plain
 from lamplighter.ports.request_check import check_request
+from lamplighter.ports.upcast import upcast
 
 __all__ = [
     "CacheHint",
     "Clock",
     "ErrorEvent",
+    "Event",
+    "EventLog",
     "Failure",
     "FailureEffect",
     "FailureKind",
@@ -49,9 +65,14 @@ __all__ = [
     "ModelEvent",
     "ModelProfile",
     "ModelRequest",
+    "NewEvent",
     "Part",
+    "RUN_END",
+    "RUN_STARTED",
     "ReasoningEvent",
     "ReasoningPart",
+    "SessionInfo",
+    "SessionState",
     "StopEvent",
     "StopReason",
     "TextEvent",
@@ -60,10 +81,16 @@ __all__ = [
     "ToolCallPart",
     "ToolResultPart",
     "ToolSpec",
+    "USER_MESSAGE",
+    "Upcaster",
+    "Upcasters",
     "Usage",
     "UsageEvent",
     "canonical_json",
+    "check_append",
+    "check_read",
     "check_request",
+    "check_tail",
     "effect_key",
     "event_id_for",
     "from_plain",
@@ -73,5 +100,6 @@ __all__ = [
     "saved_json",
     "saved_size",
     "to_plain",
+    "upcast",
     "utc_text",
 ]
