@@ -109,6 +109,32 @@ def test_delete_exports_then_removes_the_session_and_its_unused_blob(
     assert "sess-a" not in capsys.readouterr().out
 
 
+def test_delete_keeps_an_old_blob_that_another_session_uses(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    make_store(tmp_path)
+    folder = tmp_path / "store"
+    connection = opened(folder / "state.db")
+    blobs = FileBlobStore(folder / "blobs", SystemClock(), 10_000)
+
+    async def keep_one() -> BlobHandle:
+        handle = await blobs.put(b"a list another session keeps", "text/plain")
+        assert isinstance(handle, BlobHandle)
+        held = NewEvent(type="note", v=1, payload={"file": to_plain(handle)}, at=AT)
+        await SqliteEventLog(connection, {}, 10_000).append("sess-c", [held], 0)
+        return handle
+
+    kept = asyncio.run(keep_one())
+    connection.close()
+    for path in (folder / "blobs").iterdir():
+        old = path.stat().st_mtime - 7_200
+        os.utime(path, (old, old))
+    out = tmp_path / "copy"
+    assert store_command(tmp_path, "delete", "sess-a", "--export-to", str(out)) == 0
+    assert "Removed 1 blobs" in capsys.readouterr().out
+    assert (folder / "blobs" / kept.sha256).exists()
+
+
 def test_delete_refuses_a_session_whose_run_has_not_ended(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -112,6 +112,7 @@ def test_a_message_over_the_size_limit_is_too_large(inbox: Inbox) -> None:
 
 BROKEN = {
     "a channel with a capital": dataclasses.replace(inbound(), channel="Telegram"),
+    "a channel that is too long": dataclasses.replace(inbound(), channel="t" * 33),
     "an empty native id": dataclasses.replace(inbound(), native_id=""),
     "a native id that is too long": dataclasses.replace(inbound(), native_id="1" * 257),
     "an empty conversation": dataclasses.replace(inbound(), conversation=""),

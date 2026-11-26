@@ -219,9 +219,8 @@ async def delete_session(
         return exported
 
     def body(c: sqlite3.Connection) -> int | Failure:
-        refused = _refusal(c, session_id)
-        if refused is not None:
-            return refused
+        # The refusal ran before the export. Anything that could change its
+        # answer since, a run mark or an effect, changes the texts too.
         now = _session_texts(c, session_id)
         if isinstance(now, Failure):
             return now

@@ -310,10 +310,25 @@ def test_a_delete_leaves_no_copy_of_the_rows_in_the_file(
 
 
 def test_the_hashes_in_use_include_every_hex_run_in_saved_json(store: Store) -> None:
+    with_photo = inbound("3")
+    run(store.inbox.accept(with_photo))
     in_use = hashes_in_use(store.connection)
     assert not isinstance(in_use, Failure)
     assert hashlib.sha256(b"only in sess-a").hexdigest() in in_use
     assert action("sess-a").effect_key in in_use
+    assert with_photo.attachments[0].sha256 in in_use
+
+
+def test_a_delete_while_another_process_reads_leaves_the_log_for_the_next_open(
+    store: Store, tmp_path: Path
+) -> None:
+    reader = opened(store.folder / "state.db")
+    reader.execute("BEGIN")
+    reader.execute("SELECT count(*) FROM events").fetchone()
+    report = store.delete("sess-b", tmp_path / "out")
+    reader.execute("ROLLBACK")
+    assert isinstance(report, DeleteReport), report
+    assert not report.log_cleared
 
 
 def test_the_size_report_counts_the_file_the_tables_and_the_sessions(

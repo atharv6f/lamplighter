@@ -1,6 +1,7 @@
 """What the file blob store does beyond the port's contract tests."""
 
 import asyncio
+import errno
 import fcntl
 import hashlib
 import os
@@ -10,6 +11,8 @@ from collections.abc import Callable, Coroutine
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from lamplighter.adapters import BlobTotals, FileBlobStore
 from lamplighter.ports import BlobHandle, Failure
@@ -180,3 +183,15 @@ def test_a_folder_that_cannot_be_made_is_fatal(tmp_path: Path) -> None:
     blocker.write_text("not a folder")
     store = FileBlobStore(blocker / "blobs", FakeClock(), 1_000)
     assert failure_of(run(store.put(LIST, "text/plain"))).kind == "fatal"
+
+
+def test_a_full_drive_is_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def full(*_: object) -> None:
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr("lamplighter.adapters.file_blob_store.write_flushed", full)
+    store = FileBlobStore(tmp_path / "blobs", FakeClock(), 1_000)
+    failure = failure_of(run(store.put(LIST, "text/plain")))
+    assert (failure.kind, failure.effect) == ("unavailable", "none")

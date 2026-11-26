@@ -3,10 +3,11 @@ import sqlite3
 import stat
 import threading
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from lamplighter.adapters.sqlite import open_database
+from lamplighter.adapters.sqlite import database, open_database
 from lamplighter.adapters.sqlite.database import APPLICATION_ID
 from tests.sqlite.helpers import failure_of, opened
 
@@ -156,3 +157,78 @@ def test_an_open_clears_the_write_ahead_log(tmp_path: Path) -> None:
     # A second connection's open folds the log back into the file and empties it.
     opened(path)
     assert os.path.getsize(tmp_path / "state.db-wal") == 0
+
+
+def test_opening_a_store_while_another_process_writes_takes_no_write_lock(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "state.db"
+    holder = opened(path)
+    holder.execute("BEGIN IMMEDIATE")
+    try:
+        second = open_database(path, 0.05)
+        assert isinstance(second, sqlite3.Connection), second
+        second.close()
+    finally:
+        holder.execute("ROLLBACK")
+
+
+def test_a_setting_that_does_not_read_back_is_fatal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # No real build refuses these values, so the test asks for a read back
+    # that cannot happen.
+    monkeypatch.setattr(database, "_SETTINGS", (("secure_delete", "ON", 2),))
+    failure = failure_of(open_database(tmp_path / "state.db", 0.2))
+    assert failure.kind == "fatal"
+    assert "secure_delete" in failure.message
+
+
+class _NoWal:
+    """A connection whose switch to WAL answers with another mode."""
+
+    def __init__(self, inner: sqlite3.Connection) -> None:
+        self._inner = inner
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    def execute(self, sql: str, parameters: Any = ()) -> sqlite3.Cursor:
+        if sql == "PRAGMA journal_mode = WAL":
+            return self._inner.execute("SELECT 'delete'")
+        return self._inner.execute(sql, parameters)
+
+
+def test_a_file_that_will_not_switch_to_wal_is_fatal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_connect = sqlite3.connect
+
+    def connect(*args: Any, **kwargs: Any) -> Any:
+        return _NoWal(real_connect(*args, **kwargs))
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
+    failure = failure_of(open_database(tmp_path / "state.db", 0.2))
+    assert failure.kind == "fatal"
+    assert "journal_mode" in failure.message
+
+
+def test_the_switch_to_wal_waits_while_another_open_holds_the_new_file(
+    tmp_path: Path,
+) -> None:
+    # Two first opens at once: the other one holds a lock on the new file,
+    # and SQLite answers "busy" to the switch at once, without the wait it
+    # gives a write, so the switch must be tried again.
+    path = tmp_path / "state.db"
+    path.touch(mode=0o600)
+    other = sqlite3.connect(path, autocommit=True, check_same_thread=False)
+    other.execute("BEGIN IMMEDIATE")
+    release = threading.Timer(0.2, lambda: other.execute("ROLLBACK"))
+    release.start()
+    try:
+        connection = open_database(path, 5)
+        assert isinstance(connection, sqlite3.Connection), connection
+        connection.close()
+    finally:
+        release.join()
+        other.close()
