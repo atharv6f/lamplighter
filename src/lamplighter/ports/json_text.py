@@ -3,7 +3,7 @@
 import json
 
 from lamplighter.ports.json_value import JsonValue
-from lamplighter.ports.plain import to_plain
+from lamplighter.ports.plain import from_stored, to_plain
 
 
 def canonical_json(value: object) -> str:
@@ -68,3 +68,13 @@ def _refuse_floats_and_odd_keys(value: JsonValue) -> None:
     if isinstance(value, list):
         for item in value:
             _refuse_floats_and_odd_keys(item)
+
+
+def as_saved[T](record_type: type[T], record: T) -> T:
+    """Give a record as a reader of its saved form gets it.
+
+    Two records are "the same" to a store when they are equal after this, so
+    a tuple that comes back as a list, or a field that takes its default,
+    cannot make them differ.
+    """
+    return from_stored(record_type, read_saved_json(saved_json(record)))
