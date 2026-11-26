@@ -32,6 +32,17 @@ def test_the_text_is_the_same_however_it_is_cut() -> None:
     assert "".join(_pieces(2)) == LONG_TEXT
 
 
+def test_the_last_event_names_the_model_and_keeps_the_reason_as_its_own_word() -> None:
+    cut = ScriptedReply(parts=(TextPart(text="The quick"),), reason="max_output")
+    end = collect(ScriptedModel(PROFILE, [cut], random.Random(0)), REQUEST)[-1]
+    assert end == StopEvent(
+        reason="max_output",
+        provider_reason="max_output",
+        model_reported=PROFILE.model,
+        skipped=0,
+    )
+
+
 def test_a_call_past_the_end_of_the_script_is_fatal() -> None:
     model = ScriptedModel(PROFILE, [REPLY], random.Random(0))
     collect(model, REQUEST)

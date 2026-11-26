@@ -87,14 +87,25 @@ class ReplyAssembler:
         try:
             return self._handle(event.name, parse_object(event.data))
         except Unreadable as problem:
-            return self._fail(failure("transient", {"unreadable": str(problem)}))
+            return self.fail(failure("transient", {"unreadable": str(problem)}))
 
     def end_of_stream(self) -> list[ModelEvent]:
         """Say the body is over. A stream that never said it was done has failed."""
+        detail = "the stream ended before it said the reply was complete"
+        return self.fail(failure("transient", {"unreadable": detail}))
+
+    def fail(self, why: Failure) -> list[ModelEvent]:
+        """End the reply with a failure, such as a connection that dropped.
+
+        The counts received so far are still given, before the error.
+        """
         if self.finished:
             return []
-        detail = "the stream ended before it said the reply was complete"
-        return self._fail(failure("transient", {"unreadable": detail}))
+        self.finished = True
+        error = ErrorEvent(
+            failure=why, model_reported=self._model, skipped=self._skipped
+        )
+        return [*self._usage(), error]
 
     def _handle(self, name: str, data: dict[str, Any]) -> list[ModelEvent]:
         match name:
@@ -111,7 +122,7 @@ class ReplyAssembler:
             case "message_stop":
                 return self._stop()
             case "error":
-                return self._fail(failure_in_stream(as_object(data.get("error"))))
+                return self.fail(failure_in_stream(as_object(data.get("error"))))
             case "ping":
                 return []
             case _:
@@ -217,13 +228,6 @@ class ReplyAssembler:
             skipped=self._skipped,
         )
         return [*self._usage(), stop]
-
-    def _fail(self, why: Failure) -> list[ModelEvent]:
-        self.finished = True
-        error = ErrorEvent(
-            failure=why, model_reported=self._model, skipped=self._skipped
-        )
-        return [*self._usage(), error]
 
     def _usage(self) -> list[ModelEvent]:
         inputs, output = self._counts.inputs, self._counts.output

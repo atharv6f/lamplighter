@@ -21,8 +21,8 @@ from lamplighter.ports import (
     Usage,
     UsageEvent,
 )
-from tests.contract.model_clients import ClientMaker, Turn
-from tests.model_samples import REASONING, TOOL
+from tests.contract.model_clients import ClientKind, Turn
+from tests.model_samples import TOOL
 from tests.streams import collect, collect_first, count
 
 USAGE = Usage(input_uncached=120, cache_read=0, cache_write=0, output=40)
@@ -46,11 +46,16 @@ TEXT_REPLY = ScriptedReply(
     reason="end",
     usage=USAGE,
 )
-TOOL_CALL_REPLY = ScriptedReply(
-    parts=(REASONING, TextPart(text="I will read the list."), LIST_CALL),
-    reason="tool_calls",
-    usage=USAGE,
-)
+
+
+def tool_call_reply(kind: ClientKind) -> ScriptedReply:
+    return ScriptedReply(
+        parts=(kind.reasoning, TextPart(text="I will read the list."), LIST_CALL),
+        reason="tool_calls",
+        usage=USAGE,
+    )
+
+
 TWO_TOOL_CALLS_REPLY = ScriptedReply(
     parts=(LIST_CALL, PLAN_CALL), reason="tool_calls", usage=USAGE
 )
@@ -64,14 +69,26 @@ FAILS_PART_WAY = ScriptedBreak(
     parts=(TextPart(text="The list starts with"),), failure=OVERLOADED
 )
 
-EVERY_TURN = {
-    "text reply": TEXT_REPLY,
-    "tool call": TOOL_CALL_REPLY,
-    "two tool calls": TWO_TOOL_CALLS_REPLY,
-    "cut for length": CUT_FOR_LENGTH_REPLY,
-    "fails at once": FAILS_AT_ONCE,
-    "fails part way": FAILS_PART_WAY,
-}
+EVERY_TURN = [
+    "text reply",
+    "tool call",
+    "two tool calls",
+    "cut for length",
+    "fails at once",
+    "fails part way",
+]
+
+
+def play_named(kind: ClientKind, name: str) -> list[ModelEvent]:
+    turns: dict[str, Turn] = {
+        "text reply": TEXT_REPLY,
+        "tool call": tool_call_reply(kind),
+        "two tool calls": TWO_TOOL_CALLS_REPLY,
+        "cut for length": CUT_FOR_LENGTH_REPLY,
+        "fails at once": FAILS_AT_ONCE,
+        "fails part way": FAILS_PART_WAY,
+    }
+    return play(kind, turns[name])
 
 
 def ask(text: str = "What is on my list?") -> ModelRequest:
@@ -86,34 +103,32 @@ def ask(text: str = "What is on my list?") -> ModelRequest:
     )
 
 
-def play(make_client: ClientMaker, turn: Turn) -> list[ModelEvent]:
-    return collect(make_client([turn]), ask())
+def play(kind: ClientKind, turn: Turn) -> list[ModelEvent]:
+    return collect(kind.make([turn]), ask())
 
 
-@pytest.mark.parametrize("turn", EVERY_TURN.values(), ids=EVERY_TURN.keys())
-def test_a_stream_ends_with_exactly_one_last_event(
-    make_client: ClientMaker, turn: Turn
-) -> None:
-    events = play(make_client, turn)
+@pytest.mark.parametrize("turn", EVERY_TURN)
+def test_a_stream_ends_with_exactly_one_last_event(kind: ClientKind, turn: str) -> None:
+    events = play_named(kind, turn)
     last_events = [e for e in events if isinstance(e, (StopEvent, ErrorEvent))]
     assert len(last_events) == 1
     assert events[-1] is last_events[0]
 
 
-@pytest.mark.parametrize("turn", EVERY_TURN.values(), ids=EVERY_TURN.keys())
+@pytest.mark.parametrize("turn", EVERY_TURN)
 def test_usage_comes_at_most_once_and_just_before_the_last_event(
-    make_client: ClientMaker, turn: Turn
+    kind: ClientKind, turn: str
 ) -> None:
-    events = play(make_client, turn)
+    events = play_named(kind, turn)
     places = [i for i, e in enumerate(events) if isinstance(e, UsageEvent)]
     assert places in ([], [len(events) - 2])
 
 
-@pytest.mark.parametrize("turn", EVERY_TURN.values(), ids=EVERY_TURN.keys())
+@pytest.mark.parametrize("turn", EVERY_TURN)
 def test_part_indexes_start_at_zero_and_never_skip_or_go_back(
-    make_client: ClientMaker, turn: Turn
+    kind: ClientKind, turn: str
 ) -> None:
-    events = play(make_client, turn)
+    events = play_named(kind, turn)
     indexes = [
         e.index
         for e in events
@@ -124,9 +139,9 @@ def test_part_indexes_start_at_zero_and_never_skip_or_go_back(
 
 
 def test_a_text_reply_folds_back_to_the_text_that_was_sent(
-    make_client: ClientMaker,
+    kind: ClientKind,
 ) -> None:
-    events = play(make_client, TEXT_REPLY)
+    events = play(kind, TEXT_REPLY)
     reply = fold_reply(events)
     assert reply.message.parts == TEXT_REPLY.parts
     assert isinstance(reply.end, StopEvent)
@@ -135,8 +150,8 @@ def test_a_text_reply_folds_back_to_the_text_that_was_sent(
     assert reply.usage == USAGE
 
 
-def test_a_tool_call_arrives_whole_and_once(make_client: ClientMaker) -> None:
-    events = play(make_client, TOOL_CALL_REPLY)
+def test_a_tool_call_arrives_whole_and_once(kind: ClientKind) -> None:
+    events = play(kind, tool_call_reply(kind))
     calls = [e for e in events if isinstance(e, ToolCallEvent)]
     assert [call.part for call in calls] == [LIST_CALL]
     end = events[-1]
@@ -145,24 +160,24 @@ def test_a_tool_call_arrives_whole_and_once(make_client: ClientMaker) -> None:
 
 
 def test_two_tool_calls_arrive_in_order_with_different_ids(
-    make_client: ClientMaker,
+    kind: ClientKind,
 ) -> None:
-    events = play(make_client, TWO_TOOL_CALLS_REPLY)
+    events = play(kind, TWO_TOOL_CALLS_REPLY)
     calls = [e.part for e in events if isinstance(e, ToolCallEvent)]
     assert calls == [LIST_CALL, PLAN_CALL]
     assert len({call.id for call in calls}) == 2
 
 
-def test_a_reply_cut_for_length_says_so(make_client: ClientMaker) -> None:
-    end = play(make_client, CUT_FOR_LENGTH_REPLY)[-1]
+def test_a_reply_cut_for_length_says_so(kind: ClientKind) -> None:
+    end = play(kind, CUT_FOR_LENGTH_REPLY)[-1]
     assert isinstance(end, StopEvent)
     assert end.reason == "max_output"
 
 
 def test_a_failure_before_any_content_is_the_only_event(
-    make_client: ClientMaker,
+    kind: ClientKind,
 ) -> None:
-    events = play(make_client, FAILS_AT_ONCE)
+    events = play(kind, FAILS_AT_ONCE)
     assert len(events) == 1
     end = events[0]
     assert isinstance(end, ErrorEvent)
@@ -171,9 +186,9 @@ def test_a_failure_before_any_content_is_the_only_event(
 
 
 def test_a_failure_part_way_keeps_what_came_before_it(
-    make_client: ClientMaker,
+    kind: ClientKind,
 ) -> None:
-    events = play(make_client, FAILS_PART_WAY)
+    events = play(kind, FAILS_PART_WAY)
     reply = fold_reply(events)
     assert isinstance(reply.end, ErrorEvent)
     assert reply.end.failure.kind == "transient"
@@ -182,11 +197,11 @@ def test_a_failure_part_way_keeps_what_came_before_it(
 
 
 def test_the_parts_of_a_reply_come_back_unchanged_and_are_accepted_again(
-    make_client: ClientMaker,
+    kind: ClientKind,
 ) -> None:
-    client = make_client([TOOL_CALL_REPLY, TEXT_REPLY])
+    client = kind.make([tool_call_reply(kind), TEXT_REPLY])
     first = fold_reply(collect(client, ask()))
-    assert first.message.parts == TOOL_CALL_REPLY.parts
+    assert first.message.parts == tool_call_reply(kind).parts
 
     result = ToolResultPart(
         call_id=LIST_CALL.id, text="milk\neggs\ntea", is_error=False
@@ -205,9 +220,9 @@ def test_the_parts_of_a_reply_come_back_unchanged_and_are_accepted_again(
 
 
 def test_a_request_over_the_output_limit_fails_and_uses_up_no_turn(
-    make_client: ClientMaker,
+    kind: ClientKind,
 ) -> None:
-    client = make_client([TEXT_REPLY])
+    client = kind.make([TEXT_REPLY])
     too_much = dataclasses.replace(ask(), max_output=client.profile.max_output + 1)
 
     refused = collect(client, too_much)
@@ -219,15 +234,15 @@ def test_a_request_over_the_output_limit_fails_and_uses_up_no_turn(
     assert played.message.parts == TEXT_REPLY.parts
 
 
-def test_closing_a_stream_early_yields_nothing_more(make_client: ClientMaker) -> None:
-    events = collect_first(make_client([TEXT_REPLY]), ask(), count=1)
+def test_closing_a_stream_early_yields_nothing_more(kind: ClientKind) -> None:
+    events = collect_first(kind.make([TEXT_REPLY]), ask(), count=1)
     assert len(events) == 1
     assert isinstance(events[0], TextEvent)
 
 
 def test_a_token_count_is_a_whole_number_and_not_negative(
-    make_client: ClientMaker,
+    kind: ClientKind,
 ) -> None:
-    size = count(make_client([]), ask())
+    size = count(kind.make([]), ask())
     assert isinstance(size, int)
     assert size >= 0

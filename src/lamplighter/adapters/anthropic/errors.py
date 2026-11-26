@@ -1,8 +1,11 @@
 """Maps what Anthropic's API reports as wrong to this repo's failure kinds."""
 
+import re
+from collections.abc import Mapping
 from typing import Any
 
 from lamplighter.adapters.anthropic.blocks import ADAPTER
+from lamplighter.adapters.anthropic.wire import Unreadable, as_object, parse_object
 from lamplighter.ports import Failure, FailureKind, JsonValue
 
 _KIND_BY_ERROR_TYPE: dict[str, FailureKind] = {
@@ -17,6 +20,30 @@ _KIND_BY_ERROR_TYPE: dict[str, FailureKind] = {
     "timeout_error": "timeout",
     "overloaded_error": "transient",
 }
+
+_KIND_BY_STATUS: dict[int, FailureKind] = {
+    400: "invalid_input",
+    401: "needs_user",
+    402: "needs_user",
+    403: "needs_user",
+    404: "fatal",
+    408: "transient",
+    409: "transient",
+    413: "too_large",
+    429: "throttled",
+    504: "timeout",
+}
+
+# A failure of one of these kinds may clear by itself, so the call is tried again.
+_RETRIED_KINDS: frozenset[FailureKind] = frozenset(
+    {"transient", "throttled", "timeout", "unavailable"}
+)
+
+# The account has spent its monthly allowance. Waiting does not help: a person
+# has to act. The status is the same 429 as a request to slow down.
+_SPEND_CAP_CODE = "enforced_spend_limit_reached"
+
+_SECONDS = re.compile(r"\d+(\.\d+)?")
 
 # The adapter writes these itself. A provider's own message may quote part of
 # a request, so it goes into `detail` and never into `message`.
@@ -58,3 +85,73 @@ def failure_in_stream(error: dict[str, Any]) -> Failure:
     return failure(
         kind, {"error_type": error_type, "provider_message": error.get("message")}
     )
+
+
+def failure_for_response(
+    status: int, headers: Mapping[str, str], body: bytes
+) -> Failure:
+    """Give the Failure for a response whose status is not 200.
+
+    The status decides the kind, so a body that is not the documented JSON
+    still gets one. Header names must be in lower case.
+    """
+    error = _error_in(body)
+    code = _object_or_empty(error.get("details")).get("error_code")
+    kind = _kind_for(status, error.get("type"), code)
+    detail: dict[str, JsonValue] = {
+        "status": status,
+        "error_type": error.get("type"),
+        "error_code": code,
+        "request_id": headers.get("request-id"),
+        "provider_message": error.get("message"),
+    }
+    wait = _milliseconds(headers.get("retry-after")) if kind == "throttled" else None
+    return failure(kind, detail, wait)
+
+
+def may_retry(failure: Failure, should_retry_header: str | None) -> bool:
+    """Say whether a call that ended with this failure may be tried again.
+
+    The server's `x-should-retry` header decides when the response has one.
+    """
+    if should_retry_header in ("true", "false"):
+        return should_retry_header == "true"
+    return failure.kind in _RETRIED_KINDS
+
+
+def _error_in(body: bytes) -> dict[str, Any]:
+    try:
+        whole = parse_object(body.decode("utf-8", errors="replace"))
+    except Unreadable:
+        # A gateway in between may answer with a page that is not the API's JSON.
+        return {}
+    return _object_or_empty(whole.get("error"))
+
+
+def _object_or_empty(value: object) -> dict[str, Any]:
+    try:
+        return as_object(value)
+    except Unreadable:
+        return {}
+
+
+def _kind_for(status: int, error_type: object, code: object) -> FailureKind:
+    # The API also sends this error type with other statuses, such as 500.
+    if error_type == "timeout_error":
+        return "timeout"
+    if status == 429 and code == _SPEND_CAP_CODE:
+        return "needs_user"
+    if status in _KIND_BY_STATUS:
+        return _KIND_BY_STATUS[status]
+    if status >= 500:
+        return "transient"
+    # Any other refusal of the request itself. Sending it again changes nothing.
+    return "invalid_input" if status >= 400 else "fatal"
+
+
+def _milliseconds(seconds: str | None) -> int | None:
+    # The header may also hold a date, which the API does not send. A value
+    # that is not a plain number of seconds is treated as no value.
+    if seconds is None or not _SECONDS.fullmatch(seconds):
+        return None
+    return round(float(seconds) * 1000)

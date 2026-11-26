@@ -2,7 +2,10 @@ import dataclasses
 import json
 from typing import Any
 
-from lamplighter.adapters.anthropic.request import render_request
+from lamplighter.adapters.anthropic.request import (
+    render_count_request,
+    render_request,
+)
 from lamplighter.ports import (
     CacheHint,
     Message,
@@ -183,3 +186,20 @@ def test_a_mark_moves_back_past_reasoning_which_cannot_carry_one() -> None:
     content = body(hinted)["messages"][1]["content"]
     assert content[0]["cache_control"] == {"type": "ephemeral"}
     assert content[1] == SEALED
+
+
+def test_a_counting_body_is_the_prompt_and_nothing_about_the_reply() -> None:
+    whole = body(REQUEST)
+    counting = json.loads(render_count_request("made-up-1", REQUEST))
+    assert set(whole) - set(counting) == {"max_tokens", "stream"}
+    assert counting == {key: whole[key] for key in counting}
+
+
+def test_a_small_counting_request_becomes_exactly_these_bytes() -> None:
+    expected = (
+        '{"messages":[{"content":[{"text":"Is the café open?","type":"text"}],'
+        '"role":"user"}],'
+        '"model":"made-up-1",'
+        '"system":[{"text":"Be brief.","type":"text"}]}'
+    )
+    assert render_count_request("made-up-1", SMALL) == expected.encode("utf-8")

@@ -2,9 +2,9 @@
 
 import pytest
 
-from tests.contract.model_clients import MAKERS, ClientMaker
+from tests.contract.model_clients import KINDS, ClientKind
 
 
-@pytest.fixture(params=list(MAKERS.values()), ids=list(MAKERS))
-def make_client(request: pytest.FixtureRequest) -> ClientMaker:
+@pytest.fixture(params=list(KINDS.values()), ids=list(KINDS))
+def kind(request: pytest.FixtureRequest) -> ClientKind:
     return request.param

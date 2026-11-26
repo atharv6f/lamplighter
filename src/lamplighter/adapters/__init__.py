@@ -5,5 +5,6 @@ from lamplighter.adapters.scripted_model import (
     ScriptedModel,
     ScriptedReply,
 )
+from lamplighter.adapters.system_clock import SystemClock
 
-__all__ = ["ScriptedBreak", "ScriptedModel", "ScriptedReply"]
+__all__ = ["ScriptedBreak", "ScriptedModel", "ScriptedReply", "SystemClock"]

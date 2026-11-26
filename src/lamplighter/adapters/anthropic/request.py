@@ -11,23 +11,34 @@ from lamplighter.ports import JsonValue, Message, ModelRequest, ToolSpec
 
 
 def render_request(model: str, request: ModelRequest) -> bytes:
-    """Give the bytes of the call's body.
+    """Give the bytes of the body of a call for a streamed reply.
 
     The same request always gives the same bytes: keys are sorted, nothing is
     left to dict order, and tools stay in the order the request gives them.
     The provider's cache matches on an exact prefix, so one moved key would
     make every later call pay full price.
     """
-    body: dict[str, JsonValue] = {
-        "model": model,
-        "max_tokens": request.max_output,
-        "stream": True,
-        "messages": _messages(request),
-    }
+    body = _prompt(model, request)
+    body["max_tokens"] = request.max_output
+    body["stream"] = True
+    return _to_bytes(body)
+
+
+def render_count_request(model: str, request: ModelRequest) -> bytes:
+    """Give the bytes of the body of a call that only counts the prompt's tokens."""
+    return _to_bytes(_prompt(model, request))
+
+
+def _prompt(model: str, request: ModelRequest) -> dict[str, JsonValue]:
+    body: dict[str, JsonValue] = {"model": model, "messages": _messages(request)}
     if request.system:
         body["system"] = _system(request)
     if request.tools:
         body["tools"] = [_tool(tool) for tool in request.tools]
+    return body
+
+
+def _to_bytes(body: dict[str, JsonValue]) -> bytes:
     text = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return text.encode("utf-8")
 

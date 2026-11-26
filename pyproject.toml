@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "An always-on personal agent that runs on a Mac."
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "httpx>=0.28.1,<1",
+]
 
 [project.scripts]
 lamplighter = "lamplighter.app.main:main"
@@ -42,9 +44,17 @@ testpaths = ["tests"]
 
 [tool.importlinter]
 root_package = "lamplighter"
+# Needed for a rule that names a package from outside this repo.
+include_external_packages = true
 
 [[tool.importlinter.contracts]]
 name = "core does not import adapters"
 type = "forbidden"
 source_modules = ["lamplighter.core"]
 forbidden_modules = ["lamplighter.adapters"]
+
+[[tool.importlinter.contracts]]
+name = "only adapters and app use the HTTP library"
+type = "forbidden"
+source_modules = ["lamplighter.core", "lamplighter.ports"]
+forbidden_modules = ["httpx"]

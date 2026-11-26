@@ -1,3 +1,5 @@
 """The model client for Anthropic's Messages API."""
 
-__all__: list[str] = []
+from lamplighter.adapters.anthropic.client import AnthropicModel
+
+__all__ = ["AnthropicModel"]
