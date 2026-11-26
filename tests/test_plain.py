@@ -6,11 +6,13 @@ from lamplighter.ports import (
     ModelRequest,
     TextPart,
     ToolCallPart,
+    ToolResultPart,
     Usage,
     from_plain,
+    from_stored,
     to_plain,
 )
-from tests.model_samples import REQUEST, TEXT, TOOL_CALL, USAGE
+from tests.model_samples import REQUEST, TEXT, TOOL_CALL, TOOL_RESULT, USAGE
 
 
 def _plain_object(record: object) -> dict[str, JsonValue]:
@@ -72,3 +74,40 @@ def test_an_empty_count_stays_empty_and_does_not_become_zero() -> None:
     again = from_plain(Usage, to_plain(usage))
     assert again.input_uncached is None
     assert again.cache_read == 0
+
+
+def test_a_saved_record_with_a_field_this_code_does_not_know_still_reads() -> None:
+    plain = _plain_object(USAGE)
+    plain["added_by_newer_code"] = 3
+    assert from_stored(Usage, plain) == USAGE
+
+
+def test_a_saved_record_missing_a_field_with_a_default_takes_the_default() -> None:
+    plain = _plain_object(TOOL_RESULT)
+    del plain["kind"]
+    assert from_stored(ToolResultPart, plain) == TOOL_RESULT
+
+
+def test_a_saved_record_missing_a_field_with_no_default_does_not_fit() -> None:
+    plain = _plain_object(TOOL_RESULT)
+    del plain["call_id"]
+    with pytest.raises(ValueError, match="call_id"):
+        from_stored(ToolResultPart, plain)
+
+
+def test_records_inside_a_saved_record_are_read_by_the_same_rules() -> None:
+    plain = _plain_object(Message(role="assistant", parts=(TEXT, TOOL_CALL)))
+    parts = plain["parts"]
+    assert isinstance(parts, list)
+    for part in parts:
+        assert isinstance(part, dict)
+        part["added_by_newer_code"] = True
+    again = from_stored(Message, plain)
+    assert again.parts == (TEXT, TOOL_CALL)
+
+
+def test_a_saved_value_of_the_wrong_type_does_not_fit() -> None:
+    plain = _plain_object(USAGE)
+    plain["output"] = "40"
+    with pytest.raises(ValueError, match="expected int"):
+        from_stored(Usage, plain)

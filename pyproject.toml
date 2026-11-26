@@ -36,15 +36,19 @@ max-complexity = 10
 "tests/**" = ["D"]
 
 [tool.pyright]
-include = ["src", "tests"]
+include = ["src", "tests", "scripts"]
 typeCheckingMode = "strict"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# Tests marked "live" call the real API and cost money, so the default run
-# leaves them out. "-m live" on the command line runs them.
-addopts = "-m 'not live'"
-markers = ["live: calls the real Anthropic API and needs ANTHROPIC_API_KEY"]
+# Tests marked "live" call the real API and cost money, and tests marked
+# "crash" kill a process 200 times and take minutes, so the default run
+# leaves both out. "-m live" or "-m crash" on the command line runs them.
+addopts = "-m 'not live and not crash'"
+markers = [
+    "live: calls the real Anthropic API and needs ANTHROPIC_API_KEY",
+    "crash: kills a process that writes to a real store, 200 times",
+]
 
 [tool.importlinter]
 root_package = "lamplighter"

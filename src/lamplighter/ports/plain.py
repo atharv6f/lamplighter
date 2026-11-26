@@ -2,7 +2,7 @@
 
 import dataclasses
 import types
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import (
     Any,
     Literal,
@@ -32,28 +32,43 @@ def to_plain(value: object) -> JsonValue:
 
 
 def from_plain[T](record_type: type[T], data: JsonValue) -> T:
-    """Rebuild a record from its JSON form.
+    """Rebuild a record from its JSON form, which must hold exactly its fields.
 
     Raises ValueError when the data does not fit the record, because data that
     was written by `to_plain` always fits.
     """
-    return cast(T, _read(record_type, data))
+    return cast(T, _read(record_type, data, _exact_record))
 
 
-def _read(hint: Any, data: Any) -> Any:
+def from_stored[T](record_type: type[T], data: JsonValue) -> T:
+    """Rebuild a record from data that was saved, maybe by older or newer code.
+
+    A field the record does not have is ignored, because newer code may have
+    added it. A field the record has and the data lacks takes the record's
+    default, because older code did not know it. Raises ValueError when a
+    field with no default is missing or a value has the wrong type.
+    """
+    return cast(T, _read(record_type, data, _stored_record))
+
+
+type _RecordReader = Callable[[Any, Any], Any]
+
+
+def _read(hint: Any, data: Any, record: _RecordReader) -> Any:
     if isinstance(hint, TypeAliasType):
-        return _read(hint.__value__, data)
+        return _read(hint.__value__, data, record)
     origin = get_origin(hint)
     if origin is Literal:
         return _read_literal(hint, data)
     if origin in (Union, types.UnionType):
-        return _read_union(hint, data)
+        return _read_union(hint, data, record)
     if origin is tuple:
-        return tuple(_read(get_args(hint)[0], item) for item in _expect(list, data))
+        item_hint = get_args(hint)[0]
+        return tuple(_read(item_hint, item, record) for item in _expect(list, data))
     if origin is Mapping:
         return _expect(dict, data)
     if dataclasses.is_dataclass(hint):
-        return _read_record(hint, data)
+        return record(hint, data)
     return _expect(hint, data)
 
 
@@ -70,25 +85,46 @@ def _read_literal(hint: Any, data: Any) -> Any:
     return data
 
 
-def _read_union(hint: Any, data: Any) -> Any:
+def _read_union(hint: Any, data: Any, record: _RecordReader) -> Any:
     members = [m for m in get_args(hint) if m is not type(None)]
     if data is None and len(members) < len(get_args(hint)):
         return None
     if len(members) == 1:
-        return _read(members[0], data)
+        return _read(members[0], data, record)
     kind = _expect(dict, data).get("kind")
     for member in members:
         if get_args(get_type_hints(member)["kind"]) == (kind,):
-            return _read_record(member, data)
+            return record(member, data)
     raise ValueError(f"no record has kind {kind!r}")
 
 
-def _read_record(record_type: Any, data: Any) -> Any:
+def _exact_record(record_type: Any, data: Any) -> Any:
     plain = _expect(dict, data)
-    hints = get_type_hints(record_type)
     names = {f.name for f in dataclasses.fields(record_type)}
     if plain.keys() != names:
         raise ValueError(
             f"{record_type.__name__} needs exactly the fields {sorted(names)}"
         )
-    return record_type(**{name: _read(hints[name], plain[name]) for name in names})
+    hints = get_type_hints(record_type)
+    return record_type(
+        **{name: _read(hints[name], plain[name], _exact_record) for name in names}
+    )
+
+
+def _stored_record(record_type: Any, data: Any) -> Any:
+    plain = _expect(dict, data)
+    hints = get_type_hints(record_type)
+    values: dict[str, Any] = {}
+    for f in dataclasses.fields(record_type):
+        if f.name in plain:
+            values[f.name] = _read(hints[f.name], plain[f.name], _stored_record)
+        elif not _has_default(f):
+            raise ValueError(f"{record_type.__name__} is missing the field {f.name}")
+    return record_type(**values)
+
+
+def _has_default(f: dataclasses.Field[Any]) -> bool:
+    return (
+        f.default is not dataclasses.MISSING
+        or f.default_factory is not dataclasses.MISSING
+    )

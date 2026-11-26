@@ -6,6 +6,7 @@ money. These tests run that code with made-up replies.
 """
 
 import random
+from pathlib import Path
 
 import pytest
 
@@ -73,6 +74,31 @@ def test_the_reasoning_test_fails_when_the_second_call_is_refused() -> None:
     refused = ScriptedBreak(parts=(), failure=THROTTLED)
     with pytest.raises(pytest.fail.Exception, match="throttled"):
         reasoning_test(scripted(ASKS_FOR_TOOL, refused), CONFIG)
+
+
+def test_the_saved_reply_test_passes_when_the_rebuilt_reply_is_accepted(
+    tmp_path: Path,
+) -> None:
+    saved_test = live.test_a_reply_saved_in_the_store_and_rebuilt_is_accepted
+    saved_test(scripted(ASKS_FOR_TOOL, PLAIN), CONFIG, tmp_path)
+
+
+def test_the_saved_reply_test_fails_when_the_model_did_not_reason(
+    tmp_path: Path,
+) -> None:
+    saved_test = live.test_a_reply_saved_in_the_store_and_rebuilt_is_accepted
+    no_reasoning = ScriptedReply(parts=(CALL,), reason="tool_calls")
+    with pytest.raises(AssertionError, match="did not reason"):
+        saved_test(scripted(no_reasoning, PLAIN), CONFIG, tmp_path)
+
+
+def test_the_saved_reply_test_fails_when_the_rebuilt_reply_is_refused(
+    tmp_path: Path,
+) -> None:
+    saved_test = live.test_a_reply_saved_in_the_store_and_rebuilt_is_accepted
+    refused = ScriptedBreak(parts=(), failure=THROTTLED)
+    with pytest.raises(pytest.fail.Exception, match="throttled"):
+        saved_test(scripted(ASKS_FOR_TOOL, refused), CONFIG, tmp_path)
 
 
 def test_the_count_test_passes_when_the_count_is_the_real_size() -> None:

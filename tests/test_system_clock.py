@@ -1,4 +1,5 @@
 import asyncio
+from datetime import UTC, datetime
 
 from lamplighter.adapters import SystemClock
 
@@ -19,3 +20,9 @@ def test_a_sleep_takes_at_least_the_time_asked_for() -> None:
 
     # The two clocks are not the same clock, so the check leaves some room.
     assert asyncio.run(nap()) >= 0.01
+
+
+def test_the_time_of_day_is_in_utc_and_close_to_the_machine_clock() -> None:
+    moment = SystemClock().now()
+    assert moment.tzinfo is UTC
+    assert abs((moment - datetime.now(UTC)).total_seconds()) < 5

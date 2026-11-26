@@ -19,7 +19,7 @@ type FailureKind = Literal[
     "fatal",
 ]
 
-type Effect = Literal["none", "unknown", "done"]
+type FailureEffect = Literal["none", "unknown", "done"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,7 +33,7 @@ class Failure:
     """
 
     kind: FailureKind
-    effect: Effect
+    effect: FailureEffect
     message: str
     source: str
     retry_after_ms: int | None = None

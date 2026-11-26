@@ -251,7 +251,7 @@ def test_a_wait_that_ends_just_inside_the_deadline_is_taken() -> None:
 def test_the_deadline_is_counted_from_the_start_of_the_call() -> None:
     server = FakeServer(refusal(529), reply(GOOD))
     clock = FakeClock()
-    clock.now = 1_000.0
+    clock.seconds = 1_000.0
     collect(client_for(server, clock), ask(retries=1, deadline_ms=2_000))
     assert clock.slept == [0.5]
 
@@ -401,7 +401,7 @@ def test_an_answer_that_comes_after_the_deadline_is_a_timeout() -> None:
     clock = FakeClock()
 
     async def slow() -> httpx.Response:
-        clock.now += 10
+        clock.seconds += 10
         return reply(GOOD)
 
     server = FakeServer(slow, reply(GOOD))
@@ -419,7 +419,7 @@ def test_a_deadline_that_passes_part_way_ends_the_reply_and_closes_it() -> None:
 
     async def pieces() -> AsyncIterator[bytes]:
         yield message_start(Usage(7, 0, 0, None)) + part_events(0, TEXT)
-        clock.now += 10
+        clock.seconds += 10
         # These bytes were already on their way, so they are still read.
         yield part_events(1, TextPart(text="Late."))
         yield message_end("end_turn", 40)
@@ -556,7 +556,7 @@ def test_a_count_is_tried_again_by_the_same_rules_as_a_reply() -> None:
 def test_the_deadline_of_a_count_is_counted_from_the_start_of_the_call() -> None:
     server = FakeServer(refusal(529), counted(14))
     clock = FakeClock()
-    clock.now = 1_000.0
+    clock.seconds = 1_000.0
     assert count(client_for(server, clock), ask(retries=1, deadline_ms=2_000)) == 14
     assert clock.slept == [0.5]
 
