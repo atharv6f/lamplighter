@@ -9,7 +9,8 @@ max_output = 128_000
 tool_calls = true
 cache_hints = 4
 # How far a token count may be from the real prompt size, in thousandths of
-# that size. This is a first guess. The live token count test measures it.
+# that size. The live token count test measured a gap of 0 on three prompts
+# on 26 November 2026. The docs call the count an estimate, so some room stays.
 count_error_permille = 50
 
 # What one million tokens cost, in whole micro-dollars. A micro-dollar is a
