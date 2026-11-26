@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 
+from lamplighter.core.observers import Observers
 from lamplighter.core.running_sessions import RunningSessions
 from lamplighter.ports import (
     Clock,
@@ -18,8 +19,8 @@ from lamplighter.ports import (
 class Deps:
     """Everything outside the loop that the loop reads, writes or calls.
 
-    `running` is not a port. It is shared by the whole process and touches
-    nothing outside it.
+    `observers` and `running` are not ports. They touch nothing outside the
+    process, and `running` is shared by the whole of it.
     """
 
     log: EventLog
@@ -29,4 +30,5 @@ class Deps:
     tools: ToolProvider
     clock: Clock
     ids: IdSource
+    observers: Observers
     running: RunningSessions

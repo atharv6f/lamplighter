@@ -7,7 +7,7 @@ from lamplighter.core import harness_texts
 from lamplighter.core.event_types import CANCELLED, LIMIT_HIT, REPLY_READY, TOOL_RESULT
 from lamplighter.core.next_move import EndRun
 from lamplighter.core.run_deps import Deps
-from lamplighter.core.run_events import in_run
+from lamplighter.core.run_events import in_run, open_run_id
 from lamplighter.core.run_view import Ending, RunReason, RunView
 from lamplighter.core.tool_step import harness_result
 from lamplighter.ports import (
@@ -78,8 +78,7 @@ async def close_run(
     open run that the next pass closes, and never a closed run whose reply
     is in no outbox. Each write is a no-op when it is made a second time.
     """
-    if view.run_id is None:
-        raise ValueError("only an open run is closed")
+    run_id = open_run_id(view)
     for stop in stops:
         marked = await deps.inbox.mark_routed(stop.inbox_id, session_id, ending.seq)
         if isinstance(marked, Failure):
@@ -98,4 +97,4 @@ async def close_run(
     seq = await deps.log.append(session_id, (end,), view.last_seq)
     if isinstance(seq, Failure):
         return seq
-    return TurnEnd(run_id=view.run_id, last_seq=seq, reason=ending.run_reason)
+    return TurnEnd(run_id=run_id, last_seq=seq, reason=ending.run_reason)

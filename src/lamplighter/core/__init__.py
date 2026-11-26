@@ -12,6 +12,13 @@ from lamplighter.core.event_types import (
     TOOL_INTENT,
     TOOL_RESULT,
 )
+from lamplighter.core.observers import (
+    ModelCallEnded,
+    ModelCallStarted,
+    Observers,
+    ToolCallEnded,
+    ToolCallStarted,
+)
 from lamplighter.core.recovery import UnfinishedSession, UnfinishedWork, unfinished_work
 from lamplighter.core.reply import Reply, fold_reply
 from lamplighter.core.run_deps import Deps
@@ -31,10 +38,15 @@ __all__ = [
     "MODEL_RESPONSE",
     "TOOL_RESULT",
     "Deps",
+    "ModelCallEnded",
+    "ModelCallStarted",
+    "Observers",
     "Prices",
     "Reply",
     "RunSpec",
     "RunningSessions",
+    "ToolCallEnded",
+    "ToolCallStarted",
     "TurnEnd",
     "UnfinishedSession",
     "UnfinishedWork",

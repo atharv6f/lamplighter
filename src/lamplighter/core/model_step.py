@@ -9,9 +9,10 @@ from lamplighter.core.event_types import MODEL_REQUEST, MODEL_RESPONSE
 from lamplighter.core.harness_texts import MODEL_OUT_OF_TIME
 from lamplighter.core.interruptible import CutShort, Finished, NotStarted, interruptible
 from lamplighter.core.limits import time_left_ms
+from lamplighter.core.observers import ModelCallEnded, ModelCallStarted, notify
 from lamplighter.core.reply import Reply, fold_reply
 from lamplighter.core.run_deps import Deps
-from lamplighter.core.run_events import elapsed_ms, in_run
+from lamplighter.core.run_events import elapsed_ms, in_run, open_run_id
 from lamplighter.core.run_spec import RunSpec
 from lamplighter.core.run_view import RunView
 from lamplighter.core.transcript import rebuild_messages
@@ -78,26 +79,15 @@ async def call_model(
         deadline_ms=deadline_ms,
         retries=spec.model_retries,
     )
-    got: list[ModelEvent] = []
+    run_id, step = open_run_id(view), view.step + 1
+    started = ModelCallStarted(session_id, run_id, step, request)
+    await notify(deps.observers.before_model, started, deps.clock)
     start = deps.clock.monotonic()
-    raced = await interruptible(
-        _read_stream(deps.model, request, got),
-        deps.running.signal_for(session_id),
-        deps.clock,
-        # The adapter keeps the deadline itself. This is the backstop behind
-        # it, so no rule of the loop rests on an adapter behaving well.
-        allowance_s=(deadline_ms + spec.cancel_bound_ms) / 1000,
-        bound_s=spec.cancel_bound_ms / 1000,
-    )
+    reply = await _ask(session_id, request, spec, deps)
     duration_ms = elapsed_ms(start, deps.clock.monotonic())
-    match raced:
-        case NotStarted() | CutShort(reason="stop"):
-            # Nothing more is saved. The request stays, and counts as a step.
-            return None
-        case CutShort():
-            reply = fold_reply([*got, _OUT_OF_TIME])
-        case Finished():
-            reply = fold_reply(got)
+    if reply is None:
+        # Nothing more is saved. The request stays, and counts as a step.
+        return None
     response = in_run(
         asked,
         utc_text(deps.clock.now()),
@@ -107,7 +97,34 @@ async def call_model(
         duration_ms=duration_ms,
     )
     saved = await deps.log.append(session_id, (response,), request_seq)
-    return saved if isinstance(saved, Failure) else None
+    if isinstance(saved, Failure):
+        return saved
+    ended = ModelCallEnded(session_id, run_id, step, reply, duration_ms)
+    await notify(deps.observers.after_model, ended, deps.clock)
+    return None
+
+
+async def _ask(
+    session_id: str, request: ModelRequest, spec: RunSpec, deps: Deps
+) -> Reply | None:
+    # None when a stop kept the call from starting or cut it short.
+    got: list[ModelEvent] = []
+    raced = await interruptible(
+        _read_stream(deps.model, request, got),
+        deps.running.signal_for(session_id),
+        deps.clock,
+        # The adapter keeps the deadline itself. This is the backstop behind
+        # it, so no rule of the loop rests on an adapter behaving well.
+        allowance_s=(request.deadline_ms + spec.cancel_bound_ms) / 1000,
+        bound_s=spec.cancel_bound_ms / 1000,
+    )
+    match raced:
+        case NotStarted() | CutShort(reason="stop"):
+            return None
+        case CutShort():
+            return fold_reply([*got, _OUT_OF_TIME])
+        case Finished():
+            return fold_reply(got)
 
 
 async def _read_stream(

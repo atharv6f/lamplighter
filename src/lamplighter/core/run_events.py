@@ -41,3 +41,10 @@ def elapsed_ms(start: float, end: float) -> int:
     hair over a whole millisecond is not counted as one more.
     """
     return math.ceil(round((end - start) * 1000, 3))
+
+
+def open_run_id(view: RunView) -> str:
+    """Give the id of the view's open run. Only an open run takes a step."""
+    if view.run_id is None:
+        raise ValueError("this step is only taken in an open run")
+    return view.run_id

@@ -5,17 +5,20 @@ from lamplighter.core.event_types import TOOL_INTENT, TOOL_RESULT
 from lamplighter.core.harness_texts import HarnessKind, with_repeat_warning
 from lamplighter.core.interruptible import CutShort, Finished, NotStarted, interruptible
 from lamplighter.core.limits import time_left_ms
+from lamplighter.core.observers import ToolCallEnded, ToolCallStarted, notify
 from lamplighter.core.repeat_rule import deserves_warning
 from lamplighter.core.run_deps import Deps
-from lamplighter.core.run_events import elapsed_ms, in_run
+from lamplighter.core.run_events import elapsed_ms, in_run, open_run_id
 from lamplighter.core.run_spec import RunSpec
 from lamplighter.core.run_view import OpenCall, RunView
 from lamplighter.ports import (
     Failure,
     JsonObject,
     ToolResult,
+    ToolResultPart,
     ToolSpec,
     event_id_for,
+    from_stored,
     utc_text,
 )
 
@@ -44,6 +47,9 @@ async def run_call(
         return intent_seq
     if part.arguments is None:
         raise ValueError("a call whose arguments did not parse is never run")
+    run_id = open_run_id(view)
+    started = ToolCallStarted(session_id, run_id, view.step, part)
+    await notify(deps.observers.before_tool, started, deps.clock)
     start = deps.clock.monotonic()
     raced = await interruptible(
         deps.tools.call(part.name, part.arguments),
@@ -52,25 +58,33 @@ async def run_call(
         allowance_s=time_left_ms(view, spec) / 1000,
         bound_s=spec.cancel_bound_ms / 1000,
     )
-    duration_ms: int | None = elapsed_ms(start, deps.clock.monotonic())
+    duration_ms = elapsed_ms(start, deps.clock.monotonic())
     match raced:
         case NotStarted():
             payload = harness_result(call, "not_run", harness_texts.not_run(part.name))
-            duration_ms = None
         case CutShort():
             payload = _cut_short(call, raced)
         case Finished():
             payload = _tool_result(view, call, raced.value)
+    ran = not isinstance(raced, NotStarted)
     result = in_run(
         view,
         utc_text(deps.clock.now()),
         TOOL_RESULT,
         payload,
         cause=event_id_for(session_id, intent_seq),
-        duration_ms=duration_ms,
+        duration_ms=duration_ms if ran else None,
     )
     saved = await deps.log.append(session_id, (result,), intent_seq)
-    return saved if isinstance(saved, Failure) else None
+    if isinstance(saved, Failure):
+        return saved
+    if ran:
+        part_result = from_stored(ToolResultPart, payload)
+        ended = ToolCallEnded(
+            session_id, run_id, view.step, part, part_result, duration_ms
+        )
+        await notify(deps.observers.after_tool, ended, deps.clock)
+    return None
 
 
 async def answer_call(

@@ -15,7 +15,7 @@ from lamplighter.adapters.in_memory import (
     InMemoryInbox,
     InMemoryOutbox,
 )
-from lamplighter.core import Deps, RunningSessions
+from lamplighter.core import Deps, Observers, RunningSessions
 from lamplighter.ports import (
     Clock,
     Event,
@@ -51,6 +51,7 @@ class Loop:
     clock: Clock
     ids: CountingIds
     running: RunningSessions
+    observers: Observers = Observers()
 
     @property
     def deps(self) -> Deps:
@@ -62,6 +63,7 @@ class Loop:
             tools=self.tools,
             clock=self.clock,
             ids=self.ids,
+            observers=self.observers,
             running=self.running,
         )
 

@@ -47,7 +47,7 @@ class StopSignal:
     """How the race learns of a stop: is one already known, and a wait for one."""
 
     known: Callable[[], bool]
-    wait: Callable[[], Awaitable[None]]
+    wait: Callable[[], Awaitable[object]]
 
 
 async def interruptible[T](
