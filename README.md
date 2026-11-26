@@ -45,4 +45,4 @@ Then run:
 uv run --env-file .env pytest -m live -s
 ```
 
-Each test prints the token counts and the cost of its calls.
+Each test prints the token counts and the cost of its calls, and how many stream events it did not know and skipped.

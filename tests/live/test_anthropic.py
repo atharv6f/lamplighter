@@ -104,7 +104,8 @@ def show(label: str, reply: Reply, config: Config) -> None:
     dollars = "unknown" if cost is None else f"${cost / 1_000_000:.6f}"
     print(
         f"\n{label}: uncached {usage.input_uncached}, cache read {usage.cache_read},"
-        f" cache write {usage.cache_write}, output {usage.output}, cost {dollars}"
+        f" cache write {usage.cache_write}, output {usage.output}, cost {dollars},"
+        f" unknown events skipped {reply.end.skipped}"
     )
 
 
