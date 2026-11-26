@@ -14,6 +14,10 @@ from lamplighter.core.event_types import (
 )
 from lamplighter.core.recovery import UnfinishedSession, UnfinishedWork, unfinished_work
 from lamplighter.core.reply import Reply, fold_reply
+from lamplighter.core.run_deps import Deps
+from lamplighter.core.run_ending import TurnEnd
+from lamplighter.core.run_spec import RunSpec
+from lamplighter.core.run_turn import run_turn
 from lamplighter.core.transcript import rebuild_messages
 
 __all__ = [
@@ -25,13 +29,17 @@ __all__ = [
     "TOOL_INTENT",
     "MODEL_RESPONSE",
     "TOOL_RESULT",
+    "Deps",
     "Prices",
     "Reply",
+    "RunSpec",
+    "TurnEnd",
     "UnfinishedSession",
     "UnfinishedWork",
     "cost_micro_dollars",
     "fold_reply",
     "harness_texts",
     "rebuild_messages",
+    "run_turn",
     "unfinished_work",
 ]

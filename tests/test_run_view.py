@@ -183,6 +183,22 @@ def test_a_payload_of_the_open_run_that_does_not_fit_is_fatal(payload: object) -
     assert made.kind == "fatal"
 
 
+@pytest.mark.parametrize(
+    ("kind", "reason"), [("letter", "done"), ("reply", "finished"), ("reply", 3)]
+)
+def test_an_ending_with_an_unknown_kind_or_reason_is_fatal(
+    kind: str, reason: object
+) -> None:
+    history = History().start()
+    history.add(
+        "reply_ready",
+        {"text": "Done.", "kind": kind, "run_reason": reason, "run_detail": ""},
+    )
+    made = view_of(history.events)
+    assert isinstance(made, Failure)
+    assert made.kind == "fatal"
+
+
 def test_a_new_model_request_leaves_no_last_reply_until_its_own_is_saved() -> None:
     history = History().start()
     history.request()

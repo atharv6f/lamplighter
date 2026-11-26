@@ -7,7 +7,6 @@ row that ends a run, and a stop comes before every row that spends.
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal
 
 from lamplighter.core.harness_texts import (
     CONFIG_CHANGED_NOTICE,
@@ -36,7 +35,13 @@ from lamplighter.core.reply_shape import (
     tool_calls,
 )
 from lamplighter.core.run_spec import RunSpec
-from lamplighter.core.run_view import Ending, OpenCall, RunView
+from lamplighter.core.run_view import (
+    Ending,
+    MessageKind,
+    OpenCall,
+    RunReason,
+    RunView,
+)
 from lamplighter.ports import ErrorEvent, Failure, Inbound, InboxEntry, inbound_event_id
 
 STOP_COMMAND = "stop"
@@ -86,16 +91,13 @@ class AnswerCall:
     harness: HarnessKind
 
 
-type RunReason = Literal["done", "limit", "cancelled", "failed"]
-
-
 @dataclass(frozen=True, slots=True)
 class EndRun:
     """Save the end batch of a run: why it ended, and what you are told."""
 
     reason: RunReason
     detail: str
-    kind: Literal["reply", "notice"]
+    kind: MessageKind
     text: str
     limit: LimitHit | None = None
 

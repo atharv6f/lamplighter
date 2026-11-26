@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Literal
 
 from lamplighter.core.event_types import (
     MODEL_REQUEST,
@@ -26,6 +27,12 @@ from lamplighter.ports import (
 )
 
 _SOURCE = "run_view"
+
+type RunReason = Literal["done", "limit", "cancelled", "failed"]
+type MessageKind = Literal["reply", "notice"]
+
+_REASONS: tuple[RunReason, ...] = ("done", "limit", "cancelled", "failed")
+_KINDS: tuple[MessageKind, ...] = ("reply", "notice")
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,8 +80,8 @@ class Ending:
 
     seq: int
     text: str
-    kind: str
-    run_reason: str
+    kind: MessageKind
+    run_reason: RunReason
     run_detail: str
 
 
@@ -208,8 +215,8 @@ def _count(
         tally.ending = Ending(
             seq=event.seq,
             text=_text(event, "text"),
-            kind=_text(event, "kind"),
-            run_reason=_text(event, "run_reason"),
+            kind=_one_of(_KINDS, event, "kind"),
+            run_reason=_one_of(_REASONS, event, "run_reason"),
             run_detail=_text(event, "run_detail"),
         )
 
@@ -300,3 +307,11 @@ def _text(event: Event, name: str) -> str:
     if not isinstance(value, str):
         raise ValueError(f"{event.type} has no text field {name}")
     return value
+
+
+def _one_of[T: str](allowed: tuple[T, ...], event: Event, name: str) -> T:
+    value = _text(event, name)
+    for option in allowed:
+        if value == option:
+            return option
+    raise ValueError(f"{event.type} has an unknown {name}")
