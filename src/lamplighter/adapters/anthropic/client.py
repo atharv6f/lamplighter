@@ -121,6 +121,9 @@ class AnthropicModel:
 
     async def count_tokens(self, request: ModelRequest) -> int | Failure:
         """Ask the API to count the prompt. The count is the API's own estimate."""
+        problem = check_request(self._profile, request)
+        if problem is not None:
+            return problem
         deadline = self._clock.monotonic() + request.deadline_ms / 1000
         body = render_count_request(self._profile.model, self._as_sent(request))
         attempt = 0
@@ -256,8 +259,11 @@ class AnthropicModel:
 
     async def _in_time[T](self, step: Awaitable[T], deadline: float) -> T:
         """Wait for one network step. Raise TimeoutError once the deadline has come."""
-        # The time left is read from the clock that was passed in. That clock
-        # keeps counting while the Mac sleeps, and a test can move it.
+        # The time left is read from the clock that was passed in, which keeps
+        # counting while the Mac sleeps. The wait itself is the event loop's,
+        # and its timer stops while the Mac sleeps. So a step that is waiting
+        # when the lid is shut can overrun by the time it had left. The step
+        # after it reads the clock again and stops at once.
         return await asyncio.wait_for(step, deadline - self._clock.monotonic())
 
 

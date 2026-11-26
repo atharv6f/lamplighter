@@ -96,10 +96,13 @@ class ScriptedModel:
 
     async def count_tokens(self, request: ModelRequest) -> int | Failure:
         """Give the prompt size by this model's own rule, which is exact for it."""
-        return _count(request)
+        return check_request(self._profile, request) or _count(request)
 
     def _content(self, parts: Sequence[ReplyPart]) -> Iterator[ModelEvent]:
-        for index, part in enumerate(parts):
+        # A text part with no text gives no event, so it takes no place in the
+        # reply. Counting it would leave a gap in the indexes.
+        given = [part for part in parts if part != TextPart(text="")]
+        for index, part in enumerate(given):
             match part:
                 case TextPart():
                     for piece in self._pieces(part.text):

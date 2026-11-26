@@ -14,5 +14,5 @@ class SystemClock:
         return time.clock_gettime(time.CLOCK_MONOTONIC_RAW)
 
     async def sleep(self, seconds: float) -> None:
-        """Wait for the given number of seconds."""
+        """Wait for the given number of seconds the Mac is awake."""
         await asyncio.sleep(seconds)

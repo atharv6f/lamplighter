@@ -246,3 +246,25 @@ def test_a_token_count_is_a_whole_number_and_not_negative(
     size = count(kind.make([]), ask())
     assert isinstance(size, int)
     assert size >= 0
+
+
+def test_a_count_over_the_output_limit_is_refused(kind: ClientKind) -> None:
+    client = kind.make([])
+    too_much = dataclasses.replace(ask(), max_output=client.profile.max_output + 1)
+    answer = count(client, too_much)
+    assert isinstance(answer, Failure)
+    assert answer.kind == "invalid_input"
+
+
+def test_a_text_part_with_no_text_takes_no_place_in_the_reply(
+    kind: ClientKind,
+) -> None:
+    turn = ScriptedReply(
+        parts=(TextPart(text=""), TextPart(text="Tea."), LIST_CALL),
+        reason="tool_calls",
+        usage=USAGE,
+    )
+    events = play(kind, turn)
+    indexes = [e.index for e in events if isinstance(e, (TextEvent, ToolCallEvent))]
+    assert sorted(set(indexes)) == [0, 1]
+    assert fold_reply(events).message.parts == (TextPart(text="Tea."), LIST_CALL)

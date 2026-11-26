@@ -5,10 +5,8 @@
 [model]
 adapter = "anthropic"
 model = "claude-opus-5-5"
-window = 1_000_000
 max_output = 128_000
 tool_calls = true
-multiple_tool_calls = true
 cache_hints = 4
 # How far a token count may be from the real prompt size, in thousandths of
 # that size. This is a first guess. The live token count test measures it.

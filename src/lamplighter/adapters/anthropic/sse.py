@@ -24,7 +24,10 @@ class SseReader:
 
     def __init__(self) -> None:
         """Start with nothing read."""
-        self._decoder = codecs.getincrementaldecoder("utf-8")()
+        # A byte that is not UTF-8 becomes the replacement character. The
+        # event it sits in then fails to parse or carries that character, and
+        # either way the reader goes on. A strict decoder would raise.
+        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         self._unread = ""
         self._ended_with_cr = False
         self._name = ""
@@ -35,9 +38,9 @@ class SseReader:
         text = self._decoder.decode(piece)
         # A line may end with "\r\n", and a piece may end between the two. The
         # "\r" has then already ended the line, so the "\n" must not end another.
-        if self._ended_with_cr and text.startswith("\n"):
-            text = text[1:]
         if text:
+            if self._ended_with_cr and text.startswith("\n"):
+                text = text[1:]
             self._ended_with_cr = text.endswith("\r")
         *lines, self._unread = _LINE_END.split(self._unread + text)
         events = [self._take(line) for line in lines]

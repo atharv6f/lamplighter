@@ -56,9 +56,13 @@ def _messages(request: ModelRequest) -> list[JsonValue]:
     for hint in request.cache_hints:
         if hint.after == "message":
             _mark_last(contents[hint.index])
+    # A message can come out with no content, when all it held was reasoning
+    # made by another adapter. The API refuses an empty message, so it is
+    # left out.
     return [
         {"role": message.role, "content": content}
         for message, content in zip(request.messages, contents, strict=True)
+        if content
     ]
 
 

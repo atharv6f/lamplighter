@@ -14,10 +14,8 @@ GOOD = """
 [model]
 adapter = "anthropic"
 model = "made-up-1"
-window = 10_000
 max_output = 2_000
 tool_calls = true
-multiple_tool_calls = false
 cache_hints = 4
 count_error_permille = 25
 
@@ -40,10 +38,8 @@ def test_a_settings_file_is_read_into_records(tmp_path: Path) -> None:
     assert config.model == ModelProfile(
         adapter="anthropic",
         model="made-up-1",
-        window=10_000,
         max_output=2_000,
         tool_calls=True,
-        multiple_tool_calls=False,
         cache_hints=4,
         count_error_permille=25,
     )
@@ -64,9 +60,9 @@ def test_settings_cannot_be_changed_once_read(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("good", "wrong"),
     [
-        ("window = 10_000\n", ""),
-        ("window = 10_000\n", 'window = "10_000"\n'),
-        ("window = 10_000\n", "window = 10_000\ncolour = 3\n"),
+        ("max_output = 2_000\n", ""),
+        ("max_output = 2_000\n", 'max_output = "2_000"\n'),
+        ("max_output = 2_000\n", "max_output = 2_000\ncolour = 3\n"),
         ("output = 20_000_000\n", "output = 20.5\n"),
         ("[prices]", "[costs]"),
         ("tool_calls = true\n", "tool_calls = 1\n"),
@@ -84,7 +80,7 @@ def test_the_settings_file_in_the_repo_names_the_model_and_its_prices() -> None:
     config = load_config(SETTINGS)
     assert config.model.adapter == "anthropic"
     assert config.model.model == "claude-opus-5-5"
-    assert (config.model.window, config.model.max_output) == (1_000_000, 128_000)
+    assert config.model.max_output == 128_000
     assert config.model.cache_hints == 4
     assert config.prices == Prices(
         input_uncached=4_000_000,

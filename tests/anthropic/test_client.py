@@ -144,6 +144,25 @@ def test_a_call_with_no_time_at_all_is_a_timeout_and_is_never_sent() -> None:
     assert server.requests == []
 
 
+def test_a_stream_with_bytes_that_are_not_text_ends_with_a_failure() -> None:
+    not_text = b'event: content_block_start\ndata: {"index": \xff\xfe}\n\n'
+    server = FakeServer(reply(message_start() + not_text), reply(GOOD))
+    events = collect(client_for(server), ask())
+    assert len(events) == 1
+    assert the_error(events).failure.kind == "transient"
+    assert "unreadable" in the_error(events).failure.detail
+
+
+def test_a_count_the_profile_cannot_serve_is_never_sent() -> None:
+    server = FakeServer(counted(14))
+    nowhere = dataclasses.replace(
+        ask(), cache_hints=(CacheHint(after="message", index=9),)
+    )
+    answer = the_failure(count(client_for(server), nowhere))
+    assert answer.kind == "invalid_input"
+    assert server.requests == []
+
+
 def test_a_refused_call_ends_with_the_failure_for_its_status() -> None:
     server = FakeServer(refusal(401, "authentication_error"))
     events = collect(client_for(server), ask(retries=3))

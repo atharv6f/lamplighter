@@ -77,3 +77,22 @@ def test_fields_the_reader_does_not_use_are_passed_over() -> None:
     assert read(b"id: 7\nretry: 100\nstrange\ndata: x\n\n", 1000) == [
         SseEvent("message", "x")
     ]
+
+
+def test_a_line_end_split_over_three_pieces_ends_one_line_and_not_two() -> None:
+    reader = SseReader()
+    pieces = [b"event: a\ndata: 1\r", b"\n", b"\nevent: b\ndata: 2\n\n"]
+    events = [event for piece in pieces for event in reader.feed(piece)]
+    assert events == [SseEvent("a", "1"), SseEvent("b", "2")]
+
+
+def test_a_byte_that_is_not_text_is_replaced_and_reading_goes_on() -> None:
+    events = read(b"data: caf\xff\n\ndata: next\n\n", 3)
+    assert events == [SseEvent("message", "caf\ufffd"), SseEvent("message", "next")]
+
+
+def test_an_empty_piece_between_the_two_halves_of_a_line_end_changes_nothing() -> None:
+    reader = SseReader()
+    pieces = [b"data: 1\r", b"", b"\ndata: 2\n\n"]
+    events = [event for piece in pieces for event in reader.feed(piece)]
+    assert events == [SseEvent("message", "1\n2")]

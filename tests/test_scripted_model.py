@@ -6,6 +6,7 @@ from lamplighter.core import fold_reply
 from lamplighter.ports import (
     CacheHint,
     ErrorEvent,
+    Failure,
     StopEvent,
     TextEvent,
     TextPart,
@@ -73,6 +74,24 @@ def test_the_count_matches_the_prompt_size_the_stream_reports() -> None:
     assert usage is not None
     assert usage.input_uncached == count(model, REQUEST)
     assert (usage.cache_read, usage.cache_write) == (0, 0)
+
+
+def test_a_count_the_profile_cannot_serve_is_refused() -> None:
+    model = ScriptedModel(PROFILE, [], random.Random(0))
+    too_much = dataclasses.replace(REQUEST, max_output=PROFILE.max_output + 1)
+    answer = count(model, too_much)
+    assert isinstance(answer, Failure)
+    assert answer.kind == "invalid_input"
+
+
+def test_a_text_part_with_no_text_takes_no_index() -> None:
+    reply = ScriptedReply(
+        parts=(TextPart(text=""), TextPart(text="Tea."), TextPart(text="")),
+        reason="end",
+    )
+    events = collect(ScriptedModel(PROFILE, [reply], random.Random(0)), REQUEST)
+    assert {e.index for e in events if isinstance(e, TextEvent)} == {0}
+    assert fold_reply(events).message.parts == (TextPart(text="Tea."),)
 
 
 def test_usage_written_in_the_script_is_reported_as_written() -> None:

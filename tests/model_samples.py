@@ -104,10 +104,8 @@ EVENTS = (
 PROFILE = ModelProfile(
     adapter="scripted",
     model="made-up-1",
-    window=10_000,
     max_output=2_000,
     tool_calls=True,
-    multiple_tool_calls=True,
     cache_hints=0,
     count_error_permille=0,
 )

@@ -247,3 +247,15 @@ def test_a_replayed_text_piece_is_the_piece_that_was_recorded(tmp_path: Path) ->
     assert len(pieces) > 1
     replayed = collect(ReplayedModel(path), REQUEST)
     assert [e.text for e in replayed if isinstance(e, TextEvent)] == pieces
+
+
+@pytest.mark.parametrize(
+    "line", ['{"kind": "other"}', "[1, 2]", '{"request": {}}', '{"kind": "stream", "re']
+)
+def test_a_line_that_is_not_a_saved_call_is_refused(tmp_path: Path, line: str) -> None:
+    path = tmp_path / "calls.jsonl"
+    collect(RecordingModel(scripted(REPLY), path), REQUEST)
+    with path.open("a") as file:
+        file.write(line + "\n")
+    with pytest.raises(ValueError):
+        ReplayedModel(path)

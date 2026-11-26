@@ -203,3 +203,20 @@ def test_a_small_counting_request_becomes_exactly_these_bytes() -> None:
         '"system":[{"text":"Be brief.","type":"text"}]}'
     )
     assert render_count_request("made-up-1", SMALL) == expected.encode("utf-8")
+
+
+def test_a_message_left_with_no_content_is_not_sent() -> None:
+    only_foreign = Message(role="assistant", parts=(FOREIGN_REASONING,))
+    follow_up = Message(role="user", parts=(TextPart(text="And now?"),))
+    request = dataclasses.replace(
+        SMALL,
+        messages=(*SMALL.messages, only_foreign, follow_up),
+        cache_hints=(CacheHint(after="message", index=1),),
+    )
+    messages = body(request)["messages"]
+    assert [message["role"] for message in messages] == ["user", "user"]
+    assert [message["content"][0]["text"] for message in messages] == [
+        "Is the café open?",
+        "And now?",
+    ]
+    assert "cache_control" not in json.dumps(messages)

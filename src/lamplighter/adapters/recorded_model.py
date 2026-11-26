@@ -7,7 +7,7 @@ Each line after it holds one call: the request, and what came back.
 
 import contextlib
 import json
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -15,6 +15,7 @@ from typing import Literal
 from lamplighter.ports import (
     ErrorEvent,
     Failure,
+    JsonValue,
     ModelClient,
     ModelEvent,
     ModelProfile,
@@ -48,11 +49,6 @@ class _SavedCount:
 
 
 type _Saved = _SavedStream | _SavedCount
-
-_SAVED_BY_KIND: dict[str, type[_SavedStream] | type[_SavedCount]] = {
-    "stream": _SavedStream,
-    "count": _SavedCount,
-}
 
 
 class RecordingModel:
@@ -99,7 +95,7 @@ class RecordingModel:
 
     def _save(self, call: _Saved) -> None:
         # One line for each call, added as the call ends. A run that is killed
-        # part way still leaves every earlier call in the file.
+        # between two calls leaves every earlier call in the file.
         with self._path.open("a") as file:
             file.write(json.dumps(to_plain(call)) + "\n")
 
@@ -113,7 +109,11 @@ class ReplayedModel:
     """
 
     def __init__(self, path: Path) -> None:
-        """Read the recording at `path`. Raises ValueError if it is not one."""
+        """Read the recording at `path`.
+
+        Raises ValueError if any line is not as a recording saves it. A run
+        killed in the middle of writing a line leaves such a line.
+        """
         first, *rest = path.read_text().splitlines()
         header = from_plain(_Header, json.loads(first))
         if header.v != _VERSION:
@@ -146,8 +146,13 @@ class ReplayedModel:
 
 
 def _read_call(line: str) -> _Saved:
-    data = json.loads(line)
-    return from_plain(_SAVED_BY_KIND[data["kind"]], data)
+    data: JsonValue = json.loads(line)
+    kind = data.get("kind") if isinstance(data, Mapping) else None
+    if kind == "stream":
+        return from_plain(_SavedStream, data)
+    if kind == "count":
+        return from_plain(_SavedCount, data)
+    raise ValueError("a line of this recording is not a saved call")
 
 
 def _same(saved: ModelRequest, asked: ModelRequest) -> bool:

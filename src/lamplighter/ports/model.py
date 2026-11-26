@@ -196,10 +196,8 @@ class ModelProfile:
 
     adapter: str
     model: str
-    window: int
     max_output: int
     tool_calls: bool
-    multiple_tool_calls: bool
     cache_hints: int
     count_error_permille: int
 
@@ -218,8 +216,8 @@ class ModelClient(Protocol):
     - An expected failure is never raised. `stream` ends with an ErrorEvent and
       `count_tokens` returns the Failure. The effect of a Failure is always
       "none", because a model call changes nothing in the world.
-    - A request that asks for something the profile lacks ends with an
-      ErrorEvent of kind "invalid_input" before any network call.
+    - A request that asks for something the profile lacks fails with kind
+      "invalid_input" before any network call, from both methods.
     - The same request always becomes the same bytes on the wire.
     - A retry happens only before the first event has been yielded.
     - Parts taken from a reply are accepted unchanged in the next request.
