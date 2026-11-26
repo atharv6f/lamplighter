@@ -9,16 +9,22 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from lamplighter.adapters.in_memory import InMemoryEffectLedger, InMemoryEventLog
+from lamplighter.adapters import FileBlobStore
+from lamplighter.adapters.in_memory import (
+    InMemoryBlobStore,
+    InMemoryEffectLedger,
+    InMemoryEventLog,
+)
 from lamplighter.adapters.sqlite import (
     SqliteEffectLedger,
     SqliteEventLog,
     open_database,
 )
-from lamplighter.ports import EffectLedger, EventLog, Failure, Upcasters
+from lamplighter.ports import BlobStore, EffectLedger, EventLog, Failure, Upcasters
 from tests.fake_clock import FakeClock
 
 MAX_RECORD_BYTES = 2_000
+MAX_BLOB_BYTES = 5_000
 
 
 class InMemoryStores:
@@ -34,6 +40,9 @@ class InMemoryStores:
     def ledger(self) -> EffectLedger:
         return InMemoryEffectLedger(self.clock, MAX_RECORD_BYTES)
 
+    def blobs(self) -> BlobStore:
+        return InMemoryBlobStore(MAX_BLOB_BYTES)
+
     def close(self) -> None:
         pass
 
@@ -43,6 +52,7 @@ class SqliteStores:
 
     def __init__(self, folder: Path, clock: FakeClock) -> None:
         self.clock = clock
+        self.folder = folder
         connection = open_database(folder / "state.db", timeout_s=0.2)
         assert not isinstance(connection, Failure), connection
         self.connection: sqlite3.Connection = connection
@@ -52,6 +62,9 @@ class SqliteStores:
 
     def ledger(self) -> EffectLedger:
         return SqliteEffectLedger(self.connection, self.clock, MAX_RECORD_BYTES)
+
+    def blobs(self) -> BlobStore:
+        return FileBlobStore(self.folder / "blobs", self.clock, MAX_BLOB_BYTES)
 
     def close(self) -> None:
         self.connection.close()

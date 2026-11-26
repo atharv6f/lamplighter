@@ -1,5 +1,7 @@
 """The interfaces the core calls. One file per interface."""
 
+from lamplighter.ports.blob_check import blob_damage, check_handle, check_put
+from lamplighter.ports.blob_store import BlobHandle, BlobStore
 from lamplighter.ports.clock import Clock, utc_text
 from lamplighter.ports.derived_ids import effect_key, event_id_for, inbound_event_id
 from lamplighter.ports.effect_check import (
@@ -65,11 +67,14 @@ from lamplighter.ports.model import (
 from lamplighter.ports.plain import from_plain, from_stored, to_plain
 from lamplighter.ports.request_check import check_request
 from lamplighter.ports.upcast import upcast
+from lamplighter.ports.value_rules import is_hash
 
 __all__ = [
     "Action",
     "ActionClass",
     "Begun",
+    "BlobHandle",
+    "BlobStore",
     "CacheHint",
     "Clock",
     "Effect",
@@ -112,10 +117,13 @@ __all__ = [
     "Usage",
     "UsageEvent",
     "as_saved",
+    "blob_damage",
     "canonical_json",
     "check_append",
     "check_begin",
     "check_finish",
+    "check_handle",
+    "check_put",
     "check_read",
     "check_request",
     "check_resolve",
@@ -125,6 +133,7 @@ __all__ = [
     "from_plain",
     "from_stored",
     "inbound_event_id",
+    "is_hash",
     "read_saved_json",
     "saved_json",
     "saved_size",
