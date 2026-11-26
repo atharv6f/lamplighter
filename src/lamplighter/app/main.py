@@ -93,7 +93,8 @@ async def _store_command(
                 return _failed(report)
             print(
                 f"Exported {report.events} events, {report.effects} effects,"
-                f" {report.inbox} inbox rows and {len(report.blobs)} blobs"
+                f" {report.inbox} inbox rows, {report.outbox} outbox rows and"
+                f" {len(report.blobs)} blobs"
                 f" to {report.folder}."
             )
             return 0

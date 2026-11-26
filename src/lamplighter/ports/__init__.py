@@ -78,6 +78,12 @@ from lamplighter.ports.model import (
     UsageEvent,
 )
 from lamplighter.ports.outbound import DeliveryReceipt, Outbound
+from lamplighter.ports.outbox import Outbox
+from lamplighter.ports.outbox_check import (
+    check_enqueue,
+    check_receipt,
+    unknown_outbound,
+)
 from lamplighter.ports.plain import from_plain, from_stored, to_plain
 from lamplighter.ports.request_check import check_request
 from lamplighter.ports.tool_provider import ToolProvider, ToolResult
@@ -85,6 +91,10 @@ from lamplighter.ports.upcast import upcast
 from lamplighter.ports.value_rules import is_hash, is_id
 
 __all__ = [
+    "unknown_outbound",
+    "check_receipt",
+    "check_enqueue",
+    "Outbox",
     "out_id_for",
     "ToolResult",
     "ToolProvider",

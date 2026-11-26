@@ -1,4 +1,4 @@
-"""Opens the store's SQLite file, applies its settings and creates its layout."""
+"""Opens the store's SQLite file, applies its settings and updates its layout."""
 
 import contextlib
 import os
@@ -14,7 +14,7 @@ from lamplighter.ports import Failure
 # The letters LAMP read as one number, so a file of another program is never
 # mistaken for a store.
 APPLICATION_ID = 1279348048
-LAYOUT_VERSION = 1
+LAYOUT_VERSION = 2
 
 # SQLite's WAL page describes a bug, fixed in 3.51.3, that can damage a file
 # when two connections write or checkpoint at the same instant. A retention
@@ -77,6 +77,26 @@ LAYOUT = (
   WHERE routed_session_id IS NULL""",
 )
 
+# What layout version 2 added to version 1: the outbox. A new store is made
+# with it, and a version 1 store gains it when it is opened.
+OUTBOX_LAYOUT = (
+    """CREATE TABLE outbox (
+  outbox_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  out_id           TEXT    NOT NULL UNIQUE,
+  session_id       TEXT    NOT NULL,
+  v                INTEGER NOT NULL CHECK (v >= 1),
+  state            TEXT    NOT NULL,
+  outbound         TEXT    NOT NULL,
+  maybe_duplicate  INTEGER NOT NULL DEFAULT 0,
+  receipt          TEXT,
+  last_failure     TEXT,
+  enqueued_at      TEXT    NOT NULL,
+  sent_at          TEXT
+) STRICT""",
+    """CREATE INDEX outbox_due ON outbox (outbox_id)
+  WHERE state IN ('pending', 'sending')""",
+)
+
 # Each setting, the value it is set to, and what reading it back must give.
 # Only journal_mode is kept in the file. The others belong to the connection,
 # so they are set on every open, here and nowhere else.
@@ -92,8 +112,9 @@ def open_database(path: Path, timeout_s: float) -> sqlite3.Connection | Failure:
 
     `timeout_s` is how long a write waits for another process that holds the
     write lock. A file of another program is refused before anything is
-    written to it. The connection may only be used on the thread that opened
-    it, and every adapter shares it.
+    written to it. A store at layout version 1 is brought to version 2 in
+    one transaction. The connection may only be used on the thread that
+    opened it, and every adapter shares it.
     """
     if sqlite3.sqlite_version_info < OLDEST_SQLITE:
         return Failure(
@@ -155,6 +176,10 @@ def _prepare(connection: sqlite3.Connection, timeout_s: float) -> Failure | None
         created = write(connection, _SOURCE, _create_layout)
         if isinstance(created, Failure):
             return created
+    elif identity[1] == 1:
+        moved = write(connection, _SOURCE, _version_1_to_2)
+        if isinstance(moved, Failure):
+            return moved
     # Clears the write-ahead log, so rows that a killed retention command
     # deleted do not stay readable there past this start. A busy answer means
     # another process is at work, and is not an error.
@@ -200,7 +225,7 @@ def _identity(connection: sqlite3.Connection) -> tuple[int, int, int]:
 def _refusal(application_id: int, version: int, tables: int) -> Failure | None:
     if (application_id, version, tables) == (0, 0, 0):
         return None
-    if application_id == APPLICATION_ID and version == LAYOUT_VERSION:
+    if application_id == APPLICATION_ID and 1 <= version <= LAYOUT_VERSION:
         return None
     if application_id == APPLICATION_ID and version > LAYOUT_VERSION:
         return Failure(
@@ -222,10 +247,23 @@ def _create_layout(connection: sqlite3.Connection) -> bool:
     # Read again under the write lock: another process may have just made it.
     if _table_count(connection) > 0:
         return False
-    for statement in LAYOUT:
+    for statement in (*LAYOUT, *OUTBOX_LAYOUT):
         connection.execute(statement)
     connection.execute(f"PRAGMA application_id = {APPLICATION_ID}")
     connection.execute(f"PRAGMA user_version = {LAYOUT_VERSION}")
+    return True
+
+
+def _version_1_to_2(connection: sqlite3.Connection) -> bool:
+    # The first migration step. The version is read again under the write
+    # lock, because another process may have opened the same version 1 file
+    # at the same moment and made the step already.
+    (version,) = connection.execute("PRAGMA user_version").fetchone()
+    if version != 1:
+        return False
+    for statement in OUTBOX_LAYOUT:
+        connection.execute(statement)
+    connection.execute("PRAGMA user_version = 2")
     return True
 
 

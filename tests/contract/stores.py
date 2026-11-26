@@ -15,11 +15,13 @@ from lamplighter.adapters.in_memory import (
     InMemoryEffectLedger,
     InMemoryEventLog,
     InMemoryInbox,
+    InMemoryOutbox,
 )
 from lamplighter.adapters.sqlite import (
     SqliteEffectLedger,
     SqliteEventLog,
     SqliteInbox,
+    SqliteOutbox,
     open_database,
 )
 from lamplighter.ports import (
@@ -28,6 +30,7 @@ from lamplighter.ports import (
     EventLog,
     Failure,
     Inbox,
+    Outbox,
     Upcasters,
 )
 from tests.fake_clock import FakeClock
@@ -55,6 +58,9 @@ class InMemoryStores:
     def inbox(self) -> Inbox:
         return InMemoryInbox(MAX_RECORD_BYTES)
 
+    def outbox(self) -> Outbox:
+        return InMemoryOutbox(MAX_RECORD_BYTES)
+
     def close(self) -> None:
         pass
 
@@ -80,6 +86,9 @@ class SqliteStores:
 
     def inbox(self) -> Inbox:
         return SqliteInbox(self.connection, MAX_RECORD_BYTES)
+
+    def outbox(self) -> Outbox:
+        return SqliteOutbox(self.connection, self.clock, MAX_RECORD_BYTES)
 
     def close(self) -> None:
         self.connection.close()

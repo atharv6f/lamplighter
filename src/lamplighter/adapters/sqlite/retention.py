@@ -1,6 +1,6 @@
 """Exports, deletes and measures whole sessions in the store's SQLite file.
 
-These sit outside the ports: deleting a session touches three tables in one
+These sit outside the ports: deleting a session touches four tables in one
 transaction, and only the owner of the file can do that.
 """
 
@@ -32,7 +32,7 @@ from lamplighter.ports import (
 
 _SOURCE = "retention/sqlite"
 
-EXPORT_FORMAT = 1
+EXPORT_FORMAT = 2
 
 # Each table's rows of one session, and the columns that hold saved JSON.
 # An export writes those columns as nested values, not as text inside text.
@@ -42,9 +42,21 @@ _SESSION_ROWS = {
     "inbox.jsonl": (
         "SELECT * FROM inbox WHERE routed_session_id = ? ORDER BY inbox_id"
     ),
+    "outbox.jsonl": "SELECT * FROM outbox WHERE session_id = ? ORDER BY outbox_id",
 }
 _JSON_COLUMNS = frozenset(
-    {"payload", "action", "probe", "undo", "result", "resolution", "inbound"}
+    {
+        "payload",
+        "action",
+        "probe",
+        "undo",
+        "result",
+        "resolution",
+        "inbound",
+        "outbound",
+        "receipt",
+        "last_failure",
+    }
 )
 
 # Every saved JSON value in the file, for the list of blob hashes in use.
@@ -56,6 +68,9 @@ UNION ALL SELECT undo FROM effects WHERE undo IS NOT NULL
 UNION ALL SELECT result FROM effects WHERE result IS NOT NULL
 UNION ALL SELECT resolution FROM effects WHERE resolution IS NOT NULL
 UNION ALL SELECT inbound FROM inbox
+UNION ALL SELECT outbound FROM outbox
+UNION ALL SELECT receipt FROM outbox WHERE receipt IS NOT NULL
+UNION ALL SELECT last_failure FROM outbox WHERE last_failure IS NOT NULL
 """
 
 _HEX_RUN = re.compile(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])")
@@ -70,6 +85,7 @@ class ExportReport:
     events: int
     effects: int
     inbox: int
+    outbox: int
     blobs: tuple[str, ...]
     files_sha256: Mapping[str, str]
 
@@ -119,7 +135,7 @@ class SizeReport:
 
 @dataclass(frozen=True, slots=True)
 class _SessionTexts:
-    """The three export files of one session, as text, and what they hold."""
+    """The four export files of one session, as text, and what they hold."""
 
     texts: dict[str, str]
     counts: dict[str, int]
@@ -176,6 +192,7 @@ async def export_session(
         "events": rows.counts["events.jsonl"],
         "effects": rows.counts["effects.jsonl"],
         "inbox": rows.counts["inbox.jsonl"],
+        "outbox": rows.counts["outbox.jsonl"],
         "blobs": list(copied),
         "sha256": files_sha256,
     }
@@ -190,6 +207,7 @@ async def export_session(
         events=rows.counts["events.jsonl"],
         effects=rows.counts["effects.jsonl"],
         inbox=rows.counts["inbox.jsonl"],
+        outbox=rows.counts["outbox.jsonl"],
         blobs=copied,
         files_sha256=files_sha256,
     )
@@ -202,14 +220,14 @@ async def delete_session(
     export_to: Path,
     clock: Clock,
 ) -> DeleteReport | Failure:
-    """Export one session, then delete its events, effects and routed inbox rows.
+    """Export one session, then delete its events, effects, inbox and outbox rows.
 
-    A session that is unfinished, or has an effect not yet settled, is
-    refused, because an open question about the world must be settled
-    before its record goes. Inside its transaction the delete builds the
-    export's texts again from the rows as they now are. If anything was
-    added or changed since the export, it deletes nothing and gives
-    `conflict`. Blobs are not touched here: the sweep removes them.
+    A session that is unfinished, has an effect not yet settled, or has a
+    message to you not yet sent, is refused, because an open question about
+    the world must be settled before its record goes. Inside its transaction
+    the delete builds the export's texts again from the rows as they now
+    are. If anything was added or changed since the export, it deletes
+    nothing and gives `conflict`. Blobs are not touched here: the sweep removes them.
     """
     refused = read(connection, _SOURCE, lambda c: _refusal(c, session_id))
     if refused is not None:
@@ -220,7 +238,8 @@ async def delete_session(
 
     def body(c: sqlite3.Connection) -> int | Failure:
         # The refusal ran before the export. Anything that could change its
-        # answer since, a run mark or an effect, changes the texts too.
+        # answer since, a run mark, an effect or an outbox row, changes the
+        # texts too.
         now = _session_texts(c, session_id)
         if isinstance(now, Failure):
             return now
@@ -236,6 +255,7 @@ async def delete_session(
         c.execute("DELETE FROM events WHERE session_id = ?", (session_id,))
         c.execute("DELETE FROM effects WHERE session_id = ?", (session_id,))
         c.execute("DELETE FROM inbox WHERE routed_session_id = ?", (session_id,))
+        c.execute("DELETE FROM outbox WHERE session_id = ?", (session_id,))
         return now.last_seq
 
     deleted = write(connection, _SOURCE, body)
@@ -289,6 +309,7 @@ def store_sizes(connection: sqlite3.Connection, path: Path) -> SizeReport | Fail
                 ("events", _COUNT_EVENTS),
                 ("effects", _COUNT_EFFECTS),
                 ("inbox", _COUNT_INBOX),
+                ("outbox", _COUNT_OUTBOX),
             )
         )
         largest = tuple(SessionSize(*row) for row in c.execute(_LARGEST_SESSIONS))
@@ -318,6 +339,11 @@ _COUNT_EFFECTS = (
 _COUNT_INBOX = (
     "SELECT count(*), COALESCE(SUM(length(CAST(inbound AS BLOB))), 0) FROM inbox"
 )
+_COUNT_OUTBOX = (
+    "SELECT count(*), COALESCE(SUM(length(CAST(outbound AS BLOB))"
+    " + COALESCE(length(CAST(receipt AS BLOB)), 0)"
+    " + COALESCE(length(CAST(last_failure AS BLOB)), 0)), 0) FROM outbox"
+)
 _LARGEST_SESSIONS = (
     "SELECT session_id, count(*), SUM(length(CAST(payload AS BLOB))) AS bytes"
     " FROM events GROUP BY session_id ORDER BY bytes DESC, session_id LIMIT 10"
@@ -341,6 +367,12 @@ def _refusal(c: sqlite3.Connection, session_id: str) -> Failure | None:
     ).fetchone()
     if open_effects:
         return _refused(f"The session {session_id} has effects not yet settled.")
+    (unsent,) = c.execute(
+        "SELECT count(*) FROM outbox WHERE session_id = ? AND state != 'sent'",
+        (session_id,),
+    ).fetchone()
+    if unsent:
+        return _refused(f"The session {session_id} has a message not yet sent.")
     return None
 
 

@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from lamplighter.adapters.sqlite import database, open_database
-from lamplighter.adapters.sqlite.database import APPLICATION_ID
+from lamplighter.adapters.sqlite.database import APPLICATION_ID, LAYOUT
 from tests.sqlite.helpers import failure_of, opened
 
 
@@ -24,9 +24,9 @@ def test_a_new_store_is_made_with_its_layout_and_settings(tmp_path: Path) -> Non
             "SELECT name FROM sqlite_schema WHERE type = 'table'"
         )
     }
-    assert {"events", "effects", "inbox"} <= tables
+    assert {"events", "effects", "inbox", "outbox"} <= tables
     assert connection.execute("PRAGMA application_id").fetchone() == (APPLICATION_ID,)
-    assert connection.execute("PRAGMA user_version").fetchone() == (1,)
+    assert connection.execute("PRAGMA user_version").fetchone() == (2,)
     assert connection.execute("PRAGMA journal_mode").fetchone() == ("wal",)
     assert connection.execute("PRAGMA synchronous").fetchone() == (2,)
     assert connection.execute("PRAGMA fullfsync").fetchone() == (1,)
@@ -62,7 +62,7 @@ def test_a_second_open_finds_the_store_and_sets_the_connection_settings_again(
 
 def test_a_store_written_by_newer_code_is_refused(tmp_path: Path) -> None:
     connection = opened(tmp_path / "state.db")
-    connection.execute("PRAGMA user_version = 2")
+    connection.execute("PRAGMA user_version = 3")
     connection.close()
     failure = failure_of(open_database(tmp_path / "state.db", 0.2))
     assert failure.kind == "needs_user"
@@ -232,3 +232,85 @@ def test_the_switch_to_wal_waits_while_another_open_holds_the_new_file(
     finally:
         release.join()
         other.close()
+
+
+def version_1_store(path: Path) -> None:
+    """Make a store as the code of layout version 1 made it: no outbox."""
+    connection = sqlite3.connect(path)
+    for statement in LAYOUT:
+        connection.execute(statement)
+    connection.execute(f"PRAGMA application_id = {APPLICATION_ID}")
+    connection.execute("PRAGMA user_version = 1")
+    connection.commit()
+    connection.close()
+
+
+def outbox_tables(connection: sqlite3.Connection) -> int:
+    (count,) = connection.execute(
+        "SELECT count(*) FROM sqlite_schema WHERE name IN ('outbox', 'outbox_due')"
+    ).fetchone()
+    return count
+
+
+def test_a_version_1_store_gains_the_outbox_and_becomes_version_2(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "state.db"
+    version_1_store(path)
+    connection = opened(path)
+    assert connection.execute("PRAGMA user_version").fetchone() == (2,)
+    assert outbox_tables(connection) == 2
+    assert connection.execute("SELECT count(*) FROM outbox").fetchone() == (0,)
+    connection.close()
+    again = opened(path)
+    assert again.execute("PRAGMA user_version").fetchone() == (2,)
+    assert outbox_tables(again) == 2
+
+
+def test_two_opens_of_one_version_1_file_at_once_both_end_at_version_2(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "state.db"
+    version_1_store(path)
+    start = threading.Barrier(2)
+    results: list[object] = []
+
+    def open_it() -> None:
+        start.wait()
+        try:
+            connection = open_database(path, 5)
+        except BaseException as error:
+            results.append(error)
+            return
+        results.append(connection)
+        if isinstance(connection, sqlite3.Connection):
+            connection.close()
+
+    threads = [threading.Thread(target=open_it) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert all(isinstance(result, sqlite3.Connection) for result in results), results
+    check = opened(path)
+    assert check.execute("PRAGMA user_version").fetchone() == (2,)
+    assert outbox_tables(check) == 2
+
+
+def test_the_step_from_version_1_reads_the_version_again_under_the_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # This open read version 1, and then another process made the step
+    # before this one took the write lock. Read again, the version is 2.
+    path = tmp_path / "state.db"
+    opened(path).close()
+    real_identity = database._identity  # pyright: ignore[reportPrivateUsage]
+
+    def as_seen_before(connection: sqlite3.Connection) -> tuple[int, int, int]:
+        application_id, _, tables = real_identity(connection)
+        return application_id, 1, tables
+
+    monkeypatch.setattr(database, "_identity", as_seen_before)
+    connection = opened(path)
+    assert connection.execute("PRAGMA user_version").fetchone() == (2,)
+    assert outbox_tables(connection) == 2
