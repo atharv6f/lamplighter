@@ -113,7 +113,7 @@ def chat_parts(
     ids = SystemIds()
 
     def open_stores(folder: Path) -> Stores | Failure:
-        return sqlite_stores(folder, config.store.max_record_bytes, clock)
+        return sqlite_stores(folder, config, clock)
 
     def terminal(session_id: str) -> TerminalChannel:
         return TerminalChannel(session_id, clock, ids, reader, writer)
@@ -121,18 +121,18 @@ def chat_parts(
     return ChatParts(model, tools, clock, ids, open_stores, terminal, writer, errors)
 
 
-def sqlite_stores(
-    folder: Path, max_record_bytes: int, clock: Clock
-) -> Stores | Failure:
-    """Open the store file in `folder`, and build the stores a chat uses on it."""
+def sqlite_stores(folder: Path, config: Config, clock: Clock) -> Stores | Failure:
+    """Open the store file and the blob folder in `folder`, and build the stores."""
     connection = open_database(folder / "state.db", STORE_TIMEOUT_S)
     if isinstance(connection, Failure):
         return connection
+    max_record_bytes = config.store.max_record_bytes
     return Stores(
         log=SqliteEventLog(connection, {}, max_record_bytes),
         inbox=SqliteInbox(connection, max_record_bytes),
         outbox=SqliteOutbox(connection, clock, max_record_bytes),
         ledger=SqliteEffectLedger(connection, clock, max_record_bytes),
+        blobs=FileBlobStore(folder / "blobs", clock, config.store.max_blob_bytes),
         close=connection.close,
     )
 

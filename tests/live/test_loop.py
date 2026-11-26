@@ -16,8 +16,15 @@ from pathlib import Path
 
 import pytest
 
-from lamplighter.adapters import ScriptedChannel, StubTools, SystemClock, SystemIds
+from lamplighter.adapters import (
+    FileBlobStore,
+    ScriptedChannel,
+    StubTools,
+    SystemClock,
+    SystemIds,
+)
 from lamplighter.adapters.sqlite import (
+    SqliteEffectLedger,
     SqliteEventLog,
     SqliteInbox,
     SqliteOutbox,
@@ -173,6 +180,8 @@ def chat(
             outbox=SqliteOutbox(connection, clock, limit),
             model=client,
             tools=given,
+            ledger=SqliteEffectLedger(connection, clock, limit),
+            blobs=FileBlobStore(folder / "blobs", clock, config.store.max_blob_bytes),
             clock=clock,
             ids=SystemIds(),
             observers=Observers(),

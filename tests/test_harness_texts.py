@@ -114,3 +114,16 @@ def test_the_other_notices_are_pinned() -> None:
         " Send your message again."
     )
     assert texts.CUT_REPLY_LINE == "[The reply was cut off before the model finished.]"
+
+
+def test_the_texts_of_a_cut_result_are_pinned() -> None:
+    assert texts.cut_mark(4_970_000) == "[... 4970000 characters left out here ...]"
+    assert texts.saved_note(5_000_000, 4_970_000, "ab-cd-5") == (
+        "[The output was 5000000 characters long and 4970000 were left out."
+        " The full output is saved as ab-cd-5. Read more of it with read_output.]"
+    )
+    assert texts.lost_note(5_000_000, 4_970_000, "unavailable") == (
+        "[The output was 5000000 characters long and 4970000 were left out."
+        " The full output could not be saved (unavailable), so it cannot be read"
+        " later.]"
+    )

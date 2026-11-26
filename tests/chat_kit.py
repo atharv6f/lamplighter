@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 
 from lamplighter.adapters import CountingIds, ScriptedChannel, ScriptedReply
 from lamplighter.adapters.in_memory import (
+    InMemoryBlobStore,
+    InMemoryEffectLedger,
     InMemoryEventLog,
     InMemoryInbox,
     InMemoryOutbox,
@@ -35,11 +37,14 @@ from lamplighter.ports import (
     ToolCallPart,
     Usage,
 )
+from tests.fake_clock import FakeClock
 from tests.loop_kit import note_tools
 from tests.model_by_request import ModelByRequest, assistant_turns
 from tests.port_counter import (
+    CountedBlobs,
     CountedChannel,
     CountedInbox,
+    CountedLedger,
     CountedLog,
     CountedModel,
     CountedOutbox,
@@ -50,6 +55,7 @@ from tests.run_history import SESSION
 from tests.waiting_clock import JumpingClock
 
 MAX_RECORD_BYTES = 200_000
+MAX_BLOB_BYTES = 64 * 1024 * 1024
 CHAT_SECONDS = 20.0
 USAGE = Usage(input_uncached=100, cache_read=0, cache_write=0, output=20)
 
@@ -93,6 +99,12 @@ class Stores:
     )
     inbox: Inbox = field(default_factory=lambda: InMemoryInbox(MAX_RECORD_BYTES))
     outbox: Outbox = field(default_factory=lambda: InMemoryOutbox(MAX_RECORD_BYTES))
+    ledger: InMemoryEffectLedger = field(
+        default_factory=lambda: InMemoryEffectLedger(FakeClock(), MAX_RECORD_BYTES)
+    )
+    blobs: InMemoryBlobStore = field(
+        default_factory=lambda: InMemoryBlobStore(MAX_BLOB_BYTES)
+    )
 
 
 @dataclass
@@ -120,6 +132,8 @@ def process(
         outbox=CountedOutbox(stores.outbox, counter),
         model=CountedModel(model, counter),
         tools=CountedTools(note_tools(clock), counter),
+        ledger=CountedLedger(stores.ledger, counter),
+        blobs=CountedBlobs(stores.blobs, counter),
         clock=clock,
         ids=ids,
         observers=Observers(),

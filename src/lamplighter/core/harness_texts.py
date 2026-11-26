@@ -174,3 +174,24 @@ CONFIG_CHANGED_NOTICE = (
 
 # Added after a blank line to a reply that stopped at the output limit.
 CUT_REPLY_LINE = "[The reply was cut off before the model finished.]"
+
+
+def cut_mark(dropped: int) -> str:
+    """Give the line that stands where a cut text's middle was left out."""
+    return f"[... {dropped} characters left out here ...]"
+
+
+def saved_note(total: int, dropped: int, saved_as: str) -> str:
+    """Tell the model a result was cut, and the id of the whole text."""
+    return (
+        f"[The output was {total} characters long and {dropped} were left out."
+        f" The full output is saved as {saved_as}. Read more of it with read_output.]"
+    )
+
+
+def lost_note(total: int, dropped: int, kind: str) -> str:
+    """Tell the model a result was cut, and its whole text could not be saved."""
+    return (
+        f"[The output was {total} characters long and {dropped} were left out."
+        f" The full output could not be saved ({kind}), so it cannot be read later.]"
+    )

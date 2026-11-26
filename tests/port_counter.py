@@ -11,8 +11,15 @@ from typing import Literal
 
 from lamplighter.ports import (
     Accepted,
+    Action,
+    Begun,
+    BlobHandle,
+    BlobStore,
     Channel,
     DeliveryReceipt,
+    Effect,
+    EffectLedger,
+    EffectResult,
     Event,
     EventLog,
     Failure,
@@ -27,6 +34,7 @@ from lamplighter.ports import (
     NewEvent,
     Outbound,
     Outbox,
+    Outcome,
     Plan,
     SessionInfo,
     SessionState,
@@ -210,3 +218,47 @@ class CountedChannel:
 
     async def send(self, out: Outbound) -> DeliveryReceipt | Failure:
         return await self.counter.around("channel.send", lambda: self.inner.send(out))
+
+
+class CountedLedger:
+    def __init__(self, inner: EffectLedger, counter: Counter) -> None:
+        self.inner, self.counter = inner, counter
+
+    async def begin(
+        self, action: Action, probe: JsonObject | None, undo: JsonObject | None
+    ) -> Begun | Failure:
+        return await self.counter.around(
+            "ledger.begin", lambda: self.inner.begin(action, probe, undo)
+        )
+
+    async def finish(self, effect_id: int, result: EffectResult) -> None | Failure:
+        return await self.counter.around(
+            f"ledger.finish {result.outcome}",
+            lambda: self.inner.finish(effect_id, result),
+        )
+
+    async def resolve(self, effect_id: int, outcome: Outcome) -> None | Failure:
+        return await self.counter.around(
+            "ledger.resolve", lambda: self.inner.resolve(effect_id, outcome)
+        )
+
+    async def unresolved(self) -> tuple[Effect, ...] | Failure:
+        return await self.counter.around("ledger.unresolved", self.inner.unresolved)
+
+
+class CountedBlobs:
+    def __init__(self, inner: BlobStore, counter: Counter) -> None:
+        self.inner, self.counter = inner, counter
+
+    async def put(self, data: bytes, media_type: str) -> BlobHandle | Failure:
+        return await self.counter.around(
+            "blobs.put", lambda: self.inner.put(data, media_type)
+        )
+
+    async def get(self, handle: BlobHandle) -> bytes | Failure:
+        return await self.counter.around("blobs.get", lambda: self.inner.get(handle))
+
+    async def exists(self, handle: BlobHandle) -> bool | Failure:
+        return await self.counter.around(
+            "blobs.exists", lambda: self.inner.exists(handle)
+        )

@@ -25,6 +25,7 @@ from lamplighter.core import (
     unfinished_work,
 )
 from lamplighter.ports import (
+    BlobStore,
     Clock,
     EffectLedger,
     EventLog,
@@ -59,6 +60,7 @@ class Stores:
     inbox: Inbox
     outbox: Outbox
     ledger: EffectLedger
+    blobs: BlobStore
     close: Callable[[], None]
 
 
@@ -133,6 +135,8 @@ async def _serve(
         outbox=stores.outbox,
         model=parts.model,
         tools=parts.tools,
+        ledger=stores.ledger,
+        blobs=stores.blobs,
         clock=parts.clock,
         ids=parts.ids,
         observers=progress_lines(terminal.show_line),

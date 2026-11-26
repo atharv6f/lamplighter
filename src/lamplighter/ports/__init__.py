@@ -85,6 +85,7 @@ from lamplighter.ports.outbox_check import (
     check_receipt,
     unknown_outbound,
 )
+from lamplighter.ports.output_id import output_id, read_output_id
 from lamplighter.ports.plain import from_plain, from_stored, to_plain
 from lamplighter.ports.request_check import check_request
 from lamplighter.ports.tool_provider import (
@@ -103,6 +104,8 @@ __all__ = [
     "check_enqueue",
     "Outbox",
     "out_id_for",
+    "output_id",
+    "read_output_id",
     "Plan",
     "ToolEffect",
     "ToolEntry",

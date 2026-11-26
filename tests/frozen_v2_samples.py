@@ -10,6 +10,7 @@ the same chats, so a change that reads old data differently fails it.
 from dataclasses import replace
 
 from lamplighter.adapters import CountingIds, ScriptedReply, ScriptedTool, ScriptedTools
+from lamplighter.adapters.in_memory import InMemoryBlobStore, InMemoryEffectLedger
 from lamplighter.core import Deps, Observers, RunningSessions, run_turn
 from lamplighter.ports import (
     DeliveryReceipt,
@@ -22,6 +23,7 @@ from lamplighter.ports import (
     ToolResult,
     Usage,
 )
+from tests.fake_clock import FakeClock
 from tests.kill_kit import NOTE, TICK, WAIT, Killed, Turn, answers, call
 from tests.model_by_request import ModelByRequest
 from tests.run_history import SPEC, inbound, stop
@@ -101,6 +103,8 @@ async def write_v2_samples(log: EventLog, inbox: Inbox, outbox: Outbox) -> None:
         outbox=outbox,
         model=ModelByRequest(answers(SCRIPT)),
         tools=world.tools(),
+        ledger=InMemoryEffectLedger(FakeClock(), 200_000),
+        blobs=InMemoryBlobStore(64 * 1024 * 1024),
         clock=JumpingClock(),
         ids=CountingIds(),
         observers=Observers(),

@@ -46,8 +46,10 @@ from lamplighter.ports import (
 from tests.chat_kit import Outcome, Stores, outcome
 from tests.model_by_request import Choose, ModelByRequest, check_request
 from tests.port_counter import (
+    CountedBlobs,
     CountedChannel,
     CountedInbox,
+    CountedLedger,
     CountedLog,
     CountedModel,
     CountedOutbox,
@@ -234,6 +236,8 @@ async def _one_process(
         outbox=CountedOutbox(stores.outbox, counter),
         model=CountedModel(ModelByRequest(answers(scenario.script)), counter),
         tools=CountedTools(_tools(world, arrival), counter),
+        ledger=CountedLedger(stores.ledger, counter),
+        blobs=CountedBlobs(stores.blobs, counter),
         clock=world.clock,
         ids=world.ids,
         observers=Observers(),

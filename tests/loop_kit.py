@@ -11,6 +11,8 @@ from lamplighter.adapters import (
     StubTools,
 )
 from lamplighter.adapters.in_memory import (
+    InMemoryBlobStore,
+    InMemoryEffectLedger,
     InMemoryEventLog,
     InMemoryInbox,
     InMemoryOutbox,
@@ -37,6 +39,7 @@ from tests.run_history import SESSION, stop
 from tests.waiting_clock import JumpingClock
 
 MAX_RECORD_BYTES = 200_000
+MAX_BLOB_BYTES = 64 * 1024 * 1024
 
 
 @dataclass
@@ -48,6 +51,8 @@ class Loop:
     outbox: Outbox
     model: ModelClient
     tools: ToolProvider
+    ledger: InMemoryEffectLedger
+    blobs: InMemoryBlobStore
     clock: Clock
     ids: CountingIds
     running: RunningSessions
@@ -61,6 +66,8 @@ class Loop:
             outbox=self.outbox,
             model=self.model,
             tools=self.tools,
+            ledger=self.ledger,
+            blobs=self.blobs,
             clock=self.clock,
             ids=self.ids,
             observers=self.observers,
@@ -96,6 +103,8 @@ def in_memory(
         outbox=InMemoryOutbox(MAX_RECORD_BYTES),
         model=model,
         tools=tools or StubTools(clock),
+        ledger=InMemoryEffectLedger(clock, MAX_RECORD_BYTES),
+        blobs=InMemoryBlobStore(MAX_BLOB_BYTES),
         clock=clock,
         ids=CountingIds(),
         running=RunningSessions(),
