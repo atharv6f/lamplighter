@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+from datetime import UTC, datetime
 
 
 class SystemClock:
@@ -12,6 +13,10 @@ class SystemClock:
         # time.monotonic() stops while a Mac sleeps, so a deadline measured
         # with it would still look far away after the lid was shut for an hour.
         return time.clock_gettime(time.CLOCK_MONOTONIC_RAW)
+
+    def now(self) -> datetime:
+        """Give the time of day in UTC, as the Mac's clock has it."""
+        return datetime.now(UTC)
 
     async def sleep(self, seconds: float) -> None:
         """Wait for the given number of seconds the Mac is awake."""
