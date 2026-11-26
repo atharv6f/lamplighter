@@ -17,6 +17,7 @@ from lamplighter.adapters.scripted_tools import (
 from lamplighter.adapters.stub_tools import StubTools
 from lamplighter.adapters.system_clock import SystemClock
 from lamplighter.adapters.system_ids import SystemIds
+from lamplighter.adapters.terminal import TerminalChannel
 
 __all__ = [
     "CountingIds",
@@ -25,6 +26,7 @@ __all__ = [
     "ScriptedTools",
     "StubTools",
     "SystemIds",
+    "TerminalChannel",
     "ToolCallNote",
     "BlobTotals",
     "FileBlobStore",

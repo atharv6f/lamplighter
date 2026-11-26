@@ -1,0 +1,358 @@
+"""The chat command run in this process, on a real store, with a made-up model.
+
+Input comes from a pipe and the screen is held in memory. A helper thread
+plays the person: it waits for a line on the screen, then types or
+presses Ctrl-C.
+"""
+
+import asyncio
+import dataclasses
+import io
+import os
+import signal
+import stat
+import threading
+from collections.abc import Callable, Coroutine
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from lamplighter.adapters import (
+    ScriptedReply,
+    StubTools,
+    SystemClock,
+    SystemIds,
+)
+from lamplighter.adapters.sqlite import (
+    SqliteEffectLedger,
+    SqliteEventLog,
+    SqliteInbox,
+    SqliteOutbox,
+    open_database,
+)
+from lamplighter.app.chat import LOCK_HELD, UNSETTLED, WAITING, ChatParts, chat
+from lamplighter.app.config import Config, load_config
+from lamplighter.app.main import NO_KEY, main
+from lamplighter.app.single_instance import lock_store
+from lamplighter.ports import (
+    EffectLedger,
+    EventLog,
+    Failure,
+    Inbox,
+    ModelRequest,
+    NewEvent,
+    Outbound,
+    Outbox,
+    TextPart,
+    ToolCallPart,
+    Usage,
+    out_id_for,
+)
+from tests.model_by_request import Choose, ModelByRequest, assistant_turns
+from tests.model_samples import PROFILE
+from tests.run_history import AT, inbound
+from tests.store_samples import action
+from tests.terminal_kit import Keyboard, Screen, typed
+
+SETTINGS = Path(__file__).parents[1] / "lamplighter.toml"
+CHAT_SECONDS = 20.0
+USAGE = Usage(input_uncached=100, cache_read=0, cache_write=0, output=20)
+
+
+def config_in(tmp_path: Path) -> Config:
+    config = load_config(SETTINGS)
+    return dataclasses.replace(
+        config,
+        model=PROFILE,
+        store=dataclasses.replace(config.store, dir=str(tmp_path / "store")),
+        run=dataclasses.replace(config.run, model_max_output=1_000),
+    )
+
+
+def answers(request: ModelRequest) -> ScriptedReply:
+    turn = assistant_turns(request)
+    return ScriptedReply((TextPart(text=f"Answer {turn + 1}."),), "end", USAGE)
+
+
+def waits_a_minute(request: ModelRequest) -> ScriptedReply:
+    if assistant_turns(request) == 0:
+        wait = ToolCallPart(id="c1", name="wait", arguments={"seconds": 60})
+        return ScriptedReply((wait,), "tool_calls", USAGE)
+    return ScriptedReply((TextPart(text="Waited."),), "end", USAGE)
+
+
+def parts_for(
+    keyboard: Keyboard,
+    screen: io.StringIO,
+    errors: io.StringIO,
+    choose: Choose = answers,
+) -> ChatParts:
+    clock = SystemClock()
+    return ChatParts(
+        model=ModelByRequest(choose),
+        tools=StubTools(clock),
+        clock=clock,
+        ids=SystemIds(),
+        reader=keyboard.reader,
+        writer=screen,
+        errors=errors,
+    )
+
+
+def chat_with(
+    tmp_path: Path,
+    keyboard: Keyboard,
+    session: str | None = None,
+    choose: Choose = answers,
+    person: Callable[[Screen], None] | None = None,
+) -> tuple[int, str, str]:
+    """Run one chat, with the person playing beside it, and give what it did."""
+    screen, errors = Screen(), io.StringIO()
+    playing = threading.Thread(target=person, args=(screen,)) if person else None
+    if playing:
+        playing.start()
+    # A chat that never ends would hang the test run. Ending its input after
+    # a bound makes it a failed test instead.
+    timed_out = threading.Event()
+
+    def end_input() -> None:
+        timed_out.set()
+        keyboard.close()
+
+    watchdog = threading.Timer(CHAT_SECONDS, end_input)
+    watchdog.start()
+    try:
+        code = chat(
+            config_in(tmp_path), session, parts_for(keyboard, screen, errors, choose)
+        )
+    finally:
+        watchdog.cancel()
+        keyboard.close()
+        if playing:
+            playing.join(CHAT_SECONDS)
+        keyboard.done()
+    assert not timed_out.is_set(), "the chat did not end by itself"
+    return code, screen.getvalue(), errors.getvalue()
+
+
+def test_a_first_start_makes_the_folder_and_answers_each_line(
+    tmp_path: Path,
+) -> None:
+    keyboard = Keyboard()
+
+    def person(screen: Screen) -> None:
+        # Each line is typed once the answer before it is shown. A line typed
+        # during a run joins that run, and gets no answer of its own.
+        keyboard.type(b"Hello.\n")
+        if screen.wait_for("Answer 1.\n> "):
+            keyboard.type(b"Again.\n")
+            screen.wait_for("Answer 2.\n> ")
+        keyboard.close()
+
+    code, screen, errors = chat_with(tmp_path, keyboard, person=person)
+    assert (code, errors) == (0, "")
+    folder = tmp_path / "store"
+    assert stat.S_IMODE(folder.stat().st_mode) == 0o700
+    assert (folder / "state.db").is_file()
+    session = screen.splitlines()[0].removeprefix("Session ")
+    assert screen == (
+        f"Session {session}\n"
+        "> [model call 1]\nAnswer 1.\n> "
+        "[model call 1]\nAnswer 2.\n> "
+    )
+
+
+def test_a_new_session_is_started_and_its_id_printed(tmp_path: Path) -> None:
+    code, screen, _ = chat_with(tmp_path, typed(b"Hello.\n"))
+    assert code == 0
+    session = screen.splitlines()[0].removeprefix("Session ")
+    connection = open_database(tmp_path / "store" / "state.db", 5.0)
+    assert not isinstance(connection, Failure)
+    events = asyncio.run(SqliteEventLog(connection, {}, 10_000).read(session, 0))
+    connection.close()
+    assert not isinstance(events, Failure)
+    assert [e.type for e in events if e.type in ("run_started", "run_end")] == [
+        "run_started",
+        "run_end",
+    ]
+
+
+def test_a_session_given_by_id_is_carried_on_with_no_session_line(
+    tmp_path: Path,
+) -> None:
+    chat_with(tmp_path, typed(b"Hello.\n"), session="kitchen")
+    code, screen, _ = chat_with(tmp_path, typed(b"Again.\n"), session="kitchen")
+    assert code == 0
+    assert "Session " not in screen
+    # The model saw the first exchange, so this is its second answer.
+    assert "Answer 2." in screen
+
+
+def test_a_session_id_that_breaks_the_id_rule_is_refused(tmp_path: Path) -> None:
+    code, screen, errors = chat_with(tmp_path, typed(b""), session="-rm")
+    assert (code, screen) == (1, "")
+    assert "breaks the id rule" in errors
+    assert not (tmp_path / "store").exists()
+
+
+def test_a_second_process_on_the_store_is_refused(tmp_path: Path) -> None:
+    held = lock_store(tmp_path / "store")
+    assert held is not None
+    try:
+        code, screen, errors = chat_with(tmp_path, typed(b"Hello.\n"))
+    finally:
+        os.close(held)
+    assert (code, screen, errors) == (1, "", LOCK_HELD + "\n")
+    assert not (tmp_path / "store" / "state.db").exists()
+    assert LOCK_HELD == "Another lamplighter process is using this store."
+
+
+def test_the_lock_is_free_again_once_the_chat_has_ended(tmp_path: Path) -> None:
+    chat_with(tmp_path, typed(b""))
+    held = lock_store(tmp_path / "store")
+    assert held is not None
+    os.close(held)
+
+
+@dataclass
+class Saved:
+    """The stores of a chat's store folder, to fill before the chat starts."""
+
+    log: EventLog
+    inbox: Inbox
+    outbox: Outbox
+    ledger: EffectLedger
+
+
+def fill(tmp_path: Path, step: Callable[[Saved], Coroutine[Any, Any, None]]) -> None:
+    folder = tmp_path / "store"
+    folder.mkdir(mode=0o700)
+    connection = open_database(folder / "state.db", 5.0)
+    assert not isinstance(connection, Failure)
+    clock = SystemClock()
+    saved = Saved(
+        SqliteEventLog(connection, {}, 10_000),
+        SqliteInbox(connection, 10_000),
+        SqliteOutbox(connection, clock, 10_000),
+        SqliteEffectLedger(connection, clock, 10_000),
+    )
+    asyncio.run(step(saved))
+    connection.close()
+
+
+async def an_open_run(saved: Saved, session: str) -> None:
+    started = NewEvent(type="run_started", v=1, payload={}, at=AT, run_id="r-1")
+    assert await saved.log.append(session, [started], 0) == 1
+
+
+async def unsettled_in_an_open_run(saved: Saved) -> None:
+    await an_open_run(saved, "sess-b")
+    begun = await saved.ledger.begin(action("sess-b"), None, None)
+    assert not isinstance(begun, Failure)
+
+
+async def unsettled_with_no_open_run(saved: Saved) -> None:
+    begun = await saved.ledger.begin(action("sess-b"), None, None)
+    assert not isinstance(begun, Failure)
+
+
+@pytest.mark.parametrize(
+    "unsettled", [unsettled_in_an_open_run, unsettled_with_no_open_run]
+)
+def test_an_action_whose_outcome_is_not_known_stops_the_start(
+    tmp_path: Path, unsettled: Callable[[Saved], Coroutine[Any, Any, None]]
+) -> None:
+    fill(tmp_path, unsettled)
+    code, screen, errors = chat_with(tmp_path, typed(b"Hello.\n"))
+    assert (code, screen) == (1, "")
+    assert errors == UNSETTLED + "\n"
+    assert UNSETTLED == (
+        "The store holds an action whose outcome is not known."
+        " This version cannot settle it, so it will not start."
+    )
+
+
+async def waiting_work(saved: Saved) -> None:
+    await an_open_run(saved, "sess-d")
+    await saved.inbox.accept(inbound("b1", session="sess-b"))
+    left = Outbound(
+        out_id=out_id_for("sess-c", 4), session_id="sess-c", kind="reply", text="Hi."
+    )
+    assert await saved.outbox.enqueue(left) is None
+    # Work for the session being opened is carried on, not listed.
+    await saved.inbox.accept(inbound("a1", session="sess-a"))
+
+
+def test_other_sessions_with_work_waiting_are_listed(tmp_path: Path) -> None:
+    fill(tmp_path, waiting_work)
+    code, screen, _ = chat_with(tmp_path, typed(b""), session="sess-a")
+    assert code == 0
+    listed = [line for line in screen.splitlines() if "unfinished work" in line]
+    assert listed == [
+        WAITING.format(id=other) for other in ("sess-b", "sess-c", "sess-d")
+    ]
+    assert listed[0] == (
+        "Session sess-b has unfinished work."
+        " Carry it on with: lamplighter chat --session sess-b"
+    )
+    assert "Answer 1." in screen
+
+
+def test_a_missing_key_is_said_and_nothing_is_made(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    settings = tmp_path / "lamplighter.toml"
+    settings.write_text(
+        SETTINGS.read_text().replace(
+            'dir = "~/.lamplighter"', f'dir = "{tmp_path / "store"}"'
+        )
+    )
+    assert main(["--config", str(settings), "chat"]) == 1
+    assert capsys.readouterr().err == NO_KEY + "\n"
+    assert NO_KEY == "ANTHROPIC_API_KEY is not set."
+    assert not (tmp_path / "store").exists()
+
+
+def press_ctrl_c() -> None:
+    os.kill(os.getpid(), signal.SIGINT)
+
+
+def test_ctrl_c_at_the_prompt_leaves_with_code_0(tmp_path: Path) -> None:
+    def person(screen: Screen) -> None:
+        if screen.wait_for("> "):
+            press_ctrl_c()
+
+    # The input stays open, as in a terminal, so only Ctrl-C ends the chat.
+    code, screen, errors = chat_with(tmp_path, Keyboard(), person=person)
+    assert (code, errors) == (0, "")
+    assert screen.endswith("> ")
+
+
+def test_ctrl_c_during_a_tool_call_stops_the_run_and_the_prompt_comes_back(
+    tmp_path: Path,
+) -> None:
+    keyboard = Keyboard()
+    seen: list[bool] = []
+
+    def person(screen: Screen) -> None:
+        keyboard.type(b"Wait a minute.\n")
+        if screen.wait_for("[tool wait]"):
+            press_ctrl_c()
+            seen.append(screen.wait_for("[Stopped.]\n> "))
+        keyboard.close()
+
+    code, screen, _ = chat_with(
+        tmp_path, keyboard, choose=waits_a_minute, person=person
+    )
+    assert code == 0
+    assert seen == [True]
+    assert "Waited." not in screen
+
+
+def test_the_end_of_input_during_a_run_still_shows_the_reply(tmp_path: Path) -> None:
+    code, screen, _ = chat_with(tmp_path, typed(b"Hello."))
+    assert code == 0
+    assert "Answer 1." in screen

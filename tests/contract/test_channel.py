@@ -6,7 +6,7 @@ again.
 """
 
 import asyncio
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 
 import pytest
 
@@ -28,8 +28,17 @@ type Kind = Callable[[Sequence[str]], Played]
 
 
 @pytest.fixture(params=sorted(KINDS))
-def kind(request: pytest.FixtureRequest) -> Kind:
-    return KINDS[request.param]
+def kind(request: pytest.FixtureRequest) -> Iterator[Kind]:
+    made: list[Played] = []
+
+    def make(lines: Sequence[str]) -> Played:
+        played = KINDS[request.param](lines)
+        made.append(played)
+        return played
+
+    yield make
+    for played in made:
+        played.finish()
 
 
 def note(text: str, seq: int = 3) -> Outbound:

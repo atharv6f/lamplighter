@@ -17,6 +17,7 @@ class RunningSessions:
     def __init__(self) -> None:
         """Start with no session running and no stop asked for."""
         self._running: set[str] = set()
+        self._begun: dict[str, int] = {}
         self._stops: dict[str, asyncio.Event] = {}
 
     def begin(self, session_id: str) -> bool:
@@ -24,7 +25,16 @@ class RunningSessions:
         if session_id in self._running:
             return False
         self._running.add(session_id)
+        self._begun[session_id] = self.begun(session_id) + 1
         return True
+
+    def begun(self, session_id: str) -> int:
+        """Say how many calls of the loop have begun on the session in this process.
+
+        A caller that remembers the count can tell whether the call running
+        now is the one it saw before.
+        """
+        return self._begun.get(session_id, 0)
 
     def end(self, session_id: str) -> None:
         """Mark the session as no longer running."""

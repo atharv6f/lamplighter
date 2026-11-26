@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import os
 import sqlite3
 import sys
 from collections.abc import Sequence
@@ -9,7 +10,7 @@ from pathlib import Path
 
 import httpx
 
-from lamplighter.adapters import FileBlobStore, SystemClock
+from lamplighter.adapters import FileBlobStore, StubTools, SystemClock, SystemIds
 from lamplighter.adapters.anthropic import AnthropicModel
 from lamplighter.adapters.sqlite import (
     SqliteEffectLedger,
@@ -20,11 +21,11 @@ from lamplighter.adapters.sqlite import (
     open_database,
     store_sizes,
 )
+from lamplighter.app.chat import STORE_TIMEOUT_S, ChatParts, chat
 from lamplighter.app.config import Config, load_config
 from lamplighter.ports import Failure, ModelClient
 
-# How long a write waits for another process that holds the store's lock.
-STORE_TIMEOUT_S = 5.0
+NO_KEY = "ANTHROPIC_API_KEY is not set."
 
 
 def build_model(config: Config, api_key: str) -> ModelClient:
@@ -39,6 +40,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("lamplighter: nothing to run yet")
         return 0
     config = load_config(args.config)
+    if args.command == "chat":
+        return _chat(config, args.session)
     state = Path(config.store.dir) / "state.db"
     # A store command never makes a store, so a mistyped path cannot leave
     # a new empty one behind.
@@ -60,6 +63,8 @@ def _parser() -> argparse.ArgumentParser:
         "--config", type=Path, default=Path("lamplighter.toml"), help="settings file"
     )
     commands = parser.add_subparsers(dest="command")
+    talk = commands.add_parser("chat", help="talk to one session in the terminal")
+    talk.add_argument("--session", help="carry on this session, or start it")
     store = commands.add_parser("store", help="look after the saved state")
     actions = store.add_subparsers(dest="action", required=True)
     actions.add_parser("sessions", help="list every session")
@@ -71,6 +76,24 @@ def _parser() -> argparse.ArgumentParser:
     delete.add_argument("session")
     delete.add_argument("--export-to", type=Path, required=True)
     return parser
+
+
+def _chat(config: Config, session_id: str | None) -> int:
+    key = os.environ.get("ANTHROPIC_API_KEY")
+    if not key:
+        print(NO_KEY, file=sys.stderr)
+        return 1
+    clock = SystemClock()
+    parts = ChatParts(
+        model=build_model(config, key),
+        tools=StubTools(clock),
+        clock=clock,
+        ids=SystemIds(),
+        reader=sys.stdin.fileno(),
+        writer=sys.stdout,
+        errors=sys.stderr,
+    )
+    return chat(config, session_id, parts)
 
 
 async def _store_command(

@@ -5,7 +5,7 @@ import pytest
 
 from lamplighter.app.config import StoreSettings, load_config, store_folder
 from lamplighter.app.main import build_model
-from lamplighter.core import Prices
+from lamplighter.core import Prices, RunSettings
 from lamplighter.ports import ModelProfile
 
 SETTINGS = Path(__file__).parents[1] / "lamplighter.toml"
@@ -29,6 +29,17 @@ output = 20_000_000
 dir = "~/.lamplighter"
 max_record_bytes = 4_194_304
 max_blob_bytes = 67_108_864
+
+[run]
+system = "You are a made-up helper."
+max_steps = 40
+max_seconds = 1_200
+max_tokens = 1_000_000
+max_micro_dollars = 1_000_000
+model_max_output = 1_000
+model_deadline_ms = 600_000
+model_retries = 2
+cancel_bound_ms = 800
 """
 
 
@@ -104,6 +115,33 @@ def test_a_store_folder_outside_synced_folders_is_accepted(
     assert store_folder(setting, tmp_path).is_absolute()
 
 
+def test_the_run_settings_are_read(tmp_path: Path) -> None:
+    config = load_config(write(tmp_path, GOOD))
+    assert config.run == RunSettings(
+        system="You are a made-up helper.",
+        max_steps=40,
+        max_seconds=1_200,
+        max_tokens=1_000_000,
+        max_micro_dollars=1_000_000,
+        model_max_output=1_000,
+        model_deadline_ms=600_000,
+        model_retries=2,
+        cancel_bound_ms=800,
+    )
+
+
+def test_a_model_max_output_equal_to_the_models_own_is_accepted(
+    tmp_path: Path,
+) -> None:
+    text = GOOD.replace("model_max_output = 1_000\n", "model_max_output = 2_000\n")
+    assert load_config(write(tmp_path, text)).run.model_max_output == 2_000
+
+
+def test_no_retries_is_accepted(tmp_path: Path) -> None:
+    text = GOOD.replace("model_retries = 2\n", "model_retries = 0\n")
+    assert load_config(write(tmp_path, text)).run.model_retries == 0
+
+
 def test_settings_cannot_be_changed_once_read(tmp_path: Path) -> None:
     config = load_config(write(tmp_path, GOOD))
     with pytest.raises(dataclasses.FrozenInstanceError):
@@ -121,6 +159,17 @@ def test_settings_cannot_be_changed_once_read(tmp_path: Path) -> None:
         ("tool_calls = true\n", "tool_calls = 1\n"),
         ("max_blob_bytes = 67_108_864\n", ""),
         ('dir = "~/.lamplighter"', 'dir = "~/Documents/state"'),
+        ("model_max_output = 1_000\n", "model_max_output = 2_001\n"),
+        ("model_max_output = 1_000\n", "model_max_output = 0\n"),
+        ("max_steps = 40\n", "max_steps = 0\n"),
+        ("max_seconds = 1_200\n", "max_seconds = -1\n"),
+        ("max_tokens = 1_000_000\n", "max_tokens = 0\n"),
+        ("max_micro_dollars = 1_000_000\n", "max_micro_dollars = 0\n"),
+        ("model_deadline_ms = 600_000\n", "model_deadline_ms = 0\n"),
+        ("cancel_bound_ms = 800\n", "cancel_bound_ms = 0\n"),
+        ("model_retries = 2\n", "model_retries = -1\n"),
+        ('system = "You are a made-up helper."', 'system = "  "'),
+        ("cancel_bound_ms = 800\n", ""),
     ],
 )
 def test_a_settings_file_that_does_not_fit_is_rejected(
@@ -150,6 +199,16 @@ def test_the_settings_file_in_the_repo_keeps_the_store_out_of_the_checkout() -> 
     assert config.store.dir == str(Path("~/.lamplighter").expanduser().resolve())
     assert config.store.max_record_bytes == 4 * 1024 * 1024
     assert config.store.max_blob_bytes == 64 * 1024 * 1024
+
+
+def test_the_settings_file_in_the_repo_holds_the_first_run_settings() -> None:
+    run = load_config(SETTINGS).run
+    assert run.system.startswith("You are Lamplighter, a personal assistant")
+    assert run.system.endswith("If a tool fails, say what failed.")
+    assert (run.max_steps, run.max_seconds) == (40, 1_200)
+    assert (run.max_tokens, run.max_micro_dollars) == (1_000_000, 1_000_000)
+    assert (run.model_max_output, run.model_deadline_ms) == (16_000, 600_000)
+    assert (run.model_retries, run.cancel_bound_ms) == (2, 800)
 
 
 def test_the_builder_gives_a_client_for_the_model_in_the_settings() -> None:

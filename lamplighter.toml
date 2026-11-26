@@ -34,3 +34,23 @@ dir = "~/.lamplighter"
 max_record_bytes = 4_194_304
 # The largest blob, 64 MiB.
 max_blob_bytes = 67_108_864
+
+# How one run behaves. A run is the work the agent does to answer one message.
+[run]
+system = "You are Lamplighter, a personal assistant that runs on its owner's Mac. Answer plainly and briefly. Use a tool only when it helps the answer. If a tool fails, say what failed."
+# The most model calls in one run.
+max_steps = 40
+# The most seconds the run's model calls and tool calls may take, together.
+max_seconds = 1_200
+# The most tokens the run's model calls may use, input and output together.
+max_tokens = 1_000_000
+# The most the run may cost, in micro-dollars. 1_000_000 is $1.00.
+max_micro_dollars = 1_000_000
+# The most output tokens one model call may ask for. It must not be above
+# model.max_output.
+model_max_output = 16_000
+# How long one model call may take with its retries: ten minutes.
+model_deadline_ms = 600_000
+model_retries = 2
+# How long a model call or a tool call that is being cut short gets to stop.
+cancel_bound_ms = 800

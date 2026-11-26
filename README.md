@@ -8,7 +8,9 @@ The harness is written by hand in Python, to learn how one works.
 
 Model access is built: one interface for asking a model for a reply, a scripted model for tests, a client for Anthropic's API, and a way to record calls and play them back.
 
-Saved state is built: a log of every session's events, a ledger of the actions the agent takes, a store for large files, and an inbox for incoming messages. They are kept in one SQLite file and a folder of files, and they survive the process being killed at any moment. The agent loop does not exist yet, so the only thing to run is the `lamplighter store` commands below.
+Saved state is built: a log of every session's events, a ledger of the actions the agent takes, a store for large files, an inbox for incoming messages and an outbox for replies. They are kept in one SQLite file and a folder of files, and they survive the process being killed at any moment.
+
+The agent loop and a terminal chat are built. The loop asks the model, runs the tools it asks for, and saves every step before the next, so a run cut off by a kill is carried on at the next start. It has limits on steps, time, tokens and money, and it can be stopped. Two small tools are there to try it with: `current_time` and `wait`.
 
 ## Layout
 
@@ -29,7 +31,18 @@ make check
 
 `make check` runs the formatter check, lint, type check, import rule and tests. The code rules are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
-`lamplighter.toml` holds the settings: the model, its limits and its prices, and where the saved state lives. No secret goes in it.
+`lamplighter.toml` holds the settings: the model, its limits and its prices, where the saved state lives, and how one run behaves. No secret goes in it.
+
+## Chat
+
+```
+uv run --env-file .env lamplighter chat                    # start a new session and print its id
+uv run --env-file .env lamplighter chat --session SESSION  # carry on a session
+```
+
+Each line you type is one message. One line is printed before each model call and each tool call, then the reply. Type `stop`, or press Ctrl-C, to stop a run. A second Ctrl-C during the same run leaves at once with exit code 130, and the next start carries on from what is saved. Ctrl-C or Ctrl-D at the prompt leaves.
+
+One process at a time can use a store. At start, any other session with work waiting is listed with the command that carries it on.
 
 ## Saved state
 

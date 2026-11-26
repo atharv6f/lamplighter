@@ -6,6 +6,25 @@ from lamplighter.core.cost import Prices
 
 
 @dataclass(frozen=True, slots=True)
+class RunSettings:
+    """The nine run settings from the settings file.
+
+    The four `max_` values are the run's limits: model calls, seconds of
+    model and tool calls, tokens, and millionths of a dollar.
+    """
+
+    system: str
+    max_steps: int
+    max_seconds: int
+    max_tokens: int
+    max_micro_dollars: int
+    model_max_output: int
+    model_deadline_ms: int
+    model_retries: int
+    cancel_bound_ms: int
+
+
+@dataclass(frozen=True, slots=True)
 class RunSpec:
     """Everything that shapes how a run behaves, built once at start.
 
