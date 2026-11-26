@@ -8,7 +8,12 @@ from lamplighter.adapters.in_memory import (
     InMemoryEventLog,
     InMemoryInbox,
 )
-from lamplighter.adapters.sqlite import SqliteEffectLedger, SqliteEventLog, SqliteInbox
+from lamplighter.adapters.sqlite import (
+    SqliteEffectLedger,
+    SqliteEventLog,
+    SqliteInbox,
+    SqliteOutbox,
+)
 from lamplighter.core import rebuild_messages
 from lamplighter.ports import (
     Begun,
@@ -91,3 +96,16 @@ def test_the_frozen_session_rebuilds_into_its_transcript(tmp_path: Path) -> None
         REPLY.message,
         Message(role="user", parts=(RESULT,)),
     )
+
+
+def test_the_frozen_version_1_store_becomes_version_2_with_an_empty_outbox(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "state.db"
+    built = sqlite3.connect(path)
+    built.executescript(FROZEN.read_text())
+    built.close()
+    connection = opened(path)
+    assert connection.execute("PRAGMA user_version").fetchone() == (2,)
+    assert run(SqliteOutbox(connection, FakeClock(), LIMIT).due()) == ()
+    assert connection.execute("SELECT count(*) FROM outbox").fetchone() == (0,)

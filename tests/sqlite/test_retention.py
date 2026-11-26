@@ -18,6 +18,7 @@ from lamplighter.adapters.sqlite import (
     SqliteEffectLedger,
     SqliteEventLog,
     SqliteInbox,
+    SqliteOutbox,
     delete_session,
     export_session,
     hashes_in_use,
@@ -26,9 +27,12 @@ from lamplighter.adapters.sqlite import (
 from lamplighter.ports import (
     Begun,
     BlobHandle,
+    DeliveryReceipt,
     Failure,
     NewEvent,
+    Outbound,
     event_id_for,
+    out_id_for,
     to_plain,
 )
 from tests.fake_clock import FakeClock
@@ -49,6 +53,7 @@ class Store:
         self.ledger = SqliteEffectLedger(self.connection, self.clock, LIMIT)
         self.inbox = SqliteInbox(self.connection, LIMIT)
         self.blobs = FileBlobStore(folder / "blobs", self.clock, LIMIT)
+        self.outbox = SqliteOutbox(self.connection, self.clock, LIMIT)
 
     def put(self, data: bytes) -> BlobHandle:
         handle = run(self.blobs.put(data, "text/plain"))
@@ -93,7 +98,22 @@ def store(tmp_path: Path) -> Store:
     begun = run(made.ledger.begin(action("sess-a"), None, None))
     assert isinstance(begun, Begun)
     run(made.ledger.finish(begun.effect.effect_id, DONE))
+    assert run(made.outbox.enqueue(to_you("sess-a", 3))) is None
+    assert run(made.outbox.mark_sent(out_id_for("sess-a", 3), RECEIPT)) is None
+    assert run(made.outbox.enqueue(to_you("sess-d", 1))) is None
     return made
+
+
+RECEIPT = DeliveryReceipt(at=AT)
+
+
+def to_you(session_id: str, seq: int) -> Outbound:
+    return Outbound(
+        out_id=out_id_for(session_id, seq),
+        session_id=session_id,
+        kind="reply",
+        text="The kettle is on.",
+    )
 
 
 def lines(path: Path) -> list[dict[str, object]]:
@@ -120,14 +140,19 @@ def test_an_export_writes_the_rows_the_blobs_and_a_manifest(
     own = hashlib.sha256(b"only in sess-a").hexdigest()
     assert sorted(p.name for p in (out / "blobs").iterdir()) == sorted([shared, own])
     assert (out / "blobs" / own).read_bytes() == b"only in sess-a"
+    (sent,) = lines(out / "outbox.jsonl")
+    assert sent["state"] == "sent"
+    assert sent["outbound"] == to_plain(to_you("sess-a", 3))
+    assert sent["receipt"] == {"at": AT}
     manifest = json.loads((out / "manifest.json").read_text())
-    assert manifest["format"] == 1
+    assert manifest["format"] == 2
     assert manifest["session_id"] == "sess-a"
     assert manifest["exported_at"] == AT
     assert (manifest["last_seq"], manifest["events"]) == (3, 3)
-    assert (manifest["effects"], manifest["inbox"]) == (1, 1)
+    assert (manifest["effects"], manifest["inbox"], manifest["outbox"]) == (1, 1, 1)
     assert sorted(manifest["blobs"]) == sorted([shared, own])
-    for name in ("events.jsonl", "effects.jsonl", "inbox.jsonl"):
+    assert report.outbox == 1
+    for name in ("events.jsonl", "effects.jsonl", "inbox.jsonl", "outbox.jsonl"):
         digest = hashlib.sha256((out / name).read_bytes()).hexdigest()
         assert manifest["sha256"][name] == digest
     assert report.last_seq == 3
@@ -342,6 +367,57 @@ def test_the_size_report_counts_the_file_the_tables_and_the_sessions(
         "events": 4,
         "effects": 1,
         "inbox": 2,
+        "outbox": 2,
     }
     assert [s.session_id for s in report.largest_sessions] == ["sess-a", "sess-b"]
     assert report.largest_sessions[0].events == 3
+
+
+def test_a_delete_removes_the_sessions_outbox_rows_and_keeps_the_others(
+    store: Store, tmp_path: Path
+) -> None:
+    assert isinstance(store.delete("sess-a", tmp_path / "out"), DeleteReport)
+    rows = store.connection.execute("SELECT session_id FROM outbox").fetchall()
+    assert rows == [("sess-d",)]
+
+
+def test_a_session_with_a_message_not_yet_sent_is_not_deleted(
+    store: Store, tmp_path: Path
+) -> None:
+    store.append("sess-d", note("waiting"))
+    refused = failure_of(store.delete("sess-d", tmp_path / "out"))
+    assert refused.kind == "conflict"
+    assert "not yet sent" in refused.message
+    assert not (tmp_path / "out").exists()
+    assert run(store.outbox.mark_sent(out_id_for("sess-d", 1), RECEIPT)) is None
+    assert isinstance(store.delete("sess-d", tmp_path / "out"), DeleteReport)
+
+
+def test_an_outbox_row_sent_between_the_export_and_the_delete_stops_the_delete(
+    store: Store, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert run(store.outbox.enqueue(to_you("sess-a", 9))) is None
+    assert run(store.outbox.mark_sent(out_id_for("sess-a", 9), RECEIPT)) is None
+    import lamplighter.adapters.sqlite.retention as retention
+
+    real_export = retention.export_session
+
+    async def export_then_change(
+        connection: sqlite3.Connection,
+        blobs: FileBlobStore,
+        session_id: str,
+        folder: Path,
+        clock: FakeClock,
+    ) -> ExportReport | Failure:
+        report = await real_export(connection, blobs, session_id, folder, clock)
+        # A row of the session changes while the delete is under way.
+        store.connection.execute(
+            "UPDATE outbox SET sent_at = '2026-11-26T08:00:00.000Z' WHERE out_id = ?",
+            (out_id_for("sess-a", 9),),
+        )
+        return report
+
+    monkeypatch.setattr(retention, "export_session", export_then_change)
+    refused = failure_of(store.delete("sess-a", tmp_path / "out"))
+    assert refused.kind == "conflict"
+    assert store.connection.execute("SELECT count(*) FROM outbox").fetchone() == (3,)
