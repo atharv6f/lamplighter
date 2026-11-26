@@ -7,8 +7,9 @@ from lamplighter.ports.model import CacheHint, ModelProfile, ModelRequest
 def check_request(profile: ModelProfile, request: ModelRequest) -> Failure | None:
     """Give the Failure for a request this profile cannot serve, or None if it can.
 
-    Every model client runs this first, so a request that needs a missing
-    feature fails loudly here and is never sent with a changed meaning.
+    Every client that talks to a model runs this first, so a request that
+    needs a missing feature fails loudly here and is never sent with a
+    changed meaning.
     """
     problem = _problem(profile, request)
     if problem is None:

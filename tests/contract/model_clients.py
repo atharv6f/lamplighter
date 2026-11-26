@@ -5,13 +5,28 @@ that script into a client that will play it.
 """
 
 import random
-from collections.abc import Callable, Sequence
+import tempfile
+from collections.abc import AsyncGenerator, Callable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 import httpx
 
-from lamplighter.adapters import ScriptedBreak, ScriptedModel, ScriptedReply
-from lamplighter.ports import ModelClient, ReasoningPart
+from lamplighter.adapters import (
+    RecordingModel,
+    ReplayedModel,
+    ScriptedBreak,
+    ScriptedModel,
+    ScriptedReply,
+)
+from lamplighter.ports import (
+    Failure,
+    ModelClient,
+    ModelEvent,
+    ModelProfile,
+    ModelRequest,
+    ReasoningPart,
+)
 from tests.anthropic.fake_server import FakeServer, client_for, counted, refusal, reply
 from tests.anthropic.wire_text import OWN_REASONING, stream_body
 from tests.model_samples import PROFILE, REASONING
@@ -58,7 +73,47 @@ def _answer(turn: Turn) -> httpx.Response:
     return reply(stream_body(turn))
 
 
+class _ThroughARecording:
+    """Makes each call on a client, saves it, and answers from the saved file.
+
+    A test cannot record ahead of time, because it has not made its calls
+    yet. So each call is recorded to its own file and then played back, and
+    what the test sees has been through the file and out again.
+    """
+
+    def __init__(self, inner: ModelClient) -> None:
+        self._inner = inner
+        self._folder = tempfile.TemporaryDirectory()
+        self._files = 0
+
+    @property
+    def profile(self) -> ModelProfile:
+        return self._inner.profile
+
+    async def stream(self, request: ModelRequest) -> AsyncGenerator[ModelEvent]:
+        path = self._next_path()
+        async for _ in RecordingModel(self._inner, path).stream(request):
+            pass
+        async for event in ReplayedModel(path).stream(request):
+            yield event
+
+    async def count_tokens(self, request: ModelRequest) -> int | Failure:
+        path = self._next_path()
+        await RecordingModel(self._inner, path).count_tokens(request)
+        return await ReplayedModel(path).count_tokens(request)
+
+    def _next_path(self) -> Path:
+        self._files += 1
+        return Path(self._folder.name) / f"call-{self._files}.jsonl"
+
+
+def replayed(turns: Sequence[Turn]) -> ModelClient:
+    """Give a client that answers from recordings of the scripted model."""
+    return _ThroughARecording(scripted(turns))
+
+
 KINDS = {
     "scripted": ClientKind(make=scripted, reasoning=REASONING),
     "anthropic": ClientKind(make=anthropic, reasoning=OWN_REASONING),
+    "replayed": ClientKind(make=replayed, reasoning=REASONING),
 }
