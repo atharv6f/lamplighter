@@ -12,13 +12,17 @@ no model: the chat runs with the made-up model the tests use.
    runs of 40 steps. Above 250 ms, the transcript would have to be kept
    between the steps of one run.
 3. The longest line the terminal passes on: one line of 10,000 bytes is
-   typed, and the made-up model answers with how many bytes it got.
+   typed, and the made-up model answers with how many bytes it got. Where
+   a terminal drops a line that long, as macOS does, the longest line that
+   still arrives is found by halving, and the script says whether Ctrl-C
+   still works after the dropped line.
 """
 
 import asyncio
 import re
 import shutil
 import statistics
+import subprocess
 import tempfile
 import time
 from dataclasses import replace
@@ -36,6 +40,8 @@ TRIES = 10
 STEPS_PER_RUN = 40
 EVENTS = 5_000
 LONG_LINE = 10_000
+# A line that arrives is answered in milliseconds. One that does not, never.
+LINE_WAIT_S = 3.0
 USAGE = Usage(input_uncached=100, cache_read=0, cache_write=0, output=20)
 # Runs that end at their step limit, and at no other.
 FORTY_STEPS = replace(
@@ -97,21 +103,49 @@ async def rebuild_time() -> tuple[int, float]:
     return len(events), statistics.median(times)
 
 
-def longest_line() -> int:
-    """Type one line of 10,000 bytes, and give how many bytes arrived."""
+def arrived(length: int) -> tuple[int | None, int | None]:
+    """Type one line of `length` bytes, then Ctrl-C if it did not arrive.
+
+    Give how many bytes the chat got, or None, and, when the line did not
+    arrive, the exit code after the Ctrl-C, or None if it had no effect.
+    """
     folder = Path(tempfile.mkdtemp())
     terminal = Terminal(folder / "store", "lengths")
     try:
         at = terminal.wait_for("> ")
-        terminal.type(b"x" * LONG_LINE + b"\n")
-        end = terminal.wait_for(" bytes.", at)
-        got = re.findall(r"Got (\d+) bytes\.", terminal.seen[:end])
-        terminal.type(CTRL_D)
-        terminal.exit_code()
-        return int(got[-1])
+        terminal.type(b"x" * length + b"\n")
+        end = terminal.find(" bytes.", at, LINE_WAIT_S)
+        if end is not None:
+            got = re.findall(r"Got (\d+) bytes\.", terminal.seen[:end])
+            return int(got[-1]), None
+        terminal.type(CTRL_C)
+        try:
+            return None, terminal.child.wait(LINE_WAIT_S)
+        except subprocess.TimeoutExpired:
+            return None, None
     finally:
         terminal.close()
         shutil.rmtree(folder)
+
+
+def longest_line() -> str:
+    """Say what a typed line of 10,000 bytes became, and the longest that arrives."""
+    got, code = arrived(LONG_LINE)
+    if got is not None:
+        return f"A typed line of {LONG_LINE} bytes arrived as {got} bytes"
+    after = "had no effect" if code is None else f"left with code {code}"
+    # The longest length known to arrive, and the shortest known not to.
+    fits, too_long = 1, LONG_LINE
+    while too_long - fits > 1:
+        middle = (fits + too_long) // 2
+        if arrived(middle)[0] is None:
+            too_long = middle
+        else:
+            fits = middle
+    return (
+        f"A typed line of {LONG_LINE} bytes never arrived, and Ctrl-C after it"
+        f" {after}. The longest line that arrived: {fits} bytes"
+    )
 
 
 def main() -> None:
@@ -132,7 +166,7 @@ def main() -> None:
         )
     events, rebuild = asyncio.run(rebuild_time())
     print(f"Rebuilding a transcript of {events} events: {rebuild * 1000:.1f} ms")
-    print(f"A typed line of {LONG_LINE} bytes arrived as {longest_line()} bytes")
+    print(longest_line())
 
 
 if __name__ == "__main__":

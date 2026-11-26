@@ -54,12 +54,17 @@ class Terminal:
 
     def wait_for(self, text: str, after: int = 0) -> int:
         """Read until `text` shows after position `after`. Give where it ends."""
-        deadline = time.monotonic() + SECONDS
+        end = self.find(text, after, SECONDS)
+        assert end is not None, f"{text!r} never showed. The screen:\n{self.seen}"
+        return end
+
+    def find(self, text: str, after: int, seconds: float) -> int | None:
+        """Read for up to `seconds` until `text` shows after `after`. Give its end."""
+        deadline = time.monotonic() + seconds
         while (found := self.seen.find(text, after)) < 0:
             left = deadline - time.monotonic()
-            assert left > 0, f"{text!r} never showed. The screen:\n{self.seen}"
-            if not self._read(left):
-                raise AssertionError(f"{text!r} never showed. The screen:\n{self.seen}")
+            if left <= 0 or not self._read(left):
+                return None
         return found + len(text)
 
     def _read(self, seconds: float) -> bool:
@@ -76,11 +81,14 @@ class Terminal:
         return bool(data)
 
     def exit_code(self) -> int:
-        """Wait for the child to end, read what is left, and give its code."""
-        code = self.child.wait(SECONDS)
-        while select.select([self._screen], [], [], 0.1)[0] and self._read(0):
+        """Read until the child's side of the pty closes, then give its exit code."""
+        # On macOS, what the child wrote and the test had not read yet is
+        # dropped when the child's side closes. So the reading goes on while
+        # the child ends, and not after it.
+        deadline = time.monotonic() + SECONDS
+        while (left := deadline - time.monotonic()) > 0 and self._read(left):
             pass
-        return code
+        return self.child.wait(SECONDS)
 
     def close(self) -> None:
         if self.child.poll() is None:
