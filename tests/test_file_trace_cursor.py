@@ -122,6 +122,13 @@ def bad_bytes() -> dict[str, bytes]:
     made["a file cut in half"] = whole[: len(whole) // 2]
     made["a list"] = b"[1, 2]"
     made["bytes that are not text"] = b"\xff\xfe"
+    made["a number too long to convert"] = (
+        b'{"cursors":{"t":{"pos":' + b"9" * 5000 + b',"resets":0}},"v":1}'
+    )
+    made["nesting too deep to read"] = b"[" * 100_000
+    key = json.dumps(TARGET).encode()
+    twice = key + b':{"pos":300,"resets":1},' + key + b':{"pos":0,"resets":0}'
+    made["a target given twice"] = b'{"cursors":{' + twice + b'},"v":1}'
     return made
 
 
@@ -143,6 +150,24 @@ def test_a_file_in_another_shape_is_unavailable_and_never_written_over(
         assert DELETE in result.message
         assert str(tmp_path) in result.message
     assert file_of(tmp_path).read_bytes() == data
+
+
+def test_a_write_that_takes_only_part_of_the_bytes_is_finished(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    whole_write = os.write
+
+    def part(descriptor: int, data: bytes) -> int:
+        # A nearly full disk may take a few bytes of a write and no more.
+        return whole_write(descriptor, bytes(data)[:7])
+
+    made = cursor(tmp_path)
+    assert run(made.move(CursorMark(0, 0), 300)) is True
+    monkeypatch.setattr(os, "write", part)
+
+    assert run(made.move(CursorMark(300, 0), 301)) is True
+    monkeypatch.undo()
+    assert mark(made) == CursorMark(301, 0)
 
 
 def test_a_leftover_new_file_does_not_stop_a_move(tmp_path: Path) -> None:

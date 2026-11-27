@@ -192,6 +192,10 @@ def test_an_answer_to_a_question_but_200_or_404_may_pass(status: int) -> None:
         b'{"data": [{"span_id": "0000000000000000"}]}',
         b'{"data": [{"context": {"span_id": 7}}]}',
         b"[]",
+        b'{"data": [{"context": {"span_id": "0000000000000000", "n": '
+        + b"9" * 5000
+        + b"}}]}",
+        b"[" * 100_000,
     ],
 )
 def test_a_list_of_spans_that_cannot_be_read_is_fatal(body: bytes) -> None:

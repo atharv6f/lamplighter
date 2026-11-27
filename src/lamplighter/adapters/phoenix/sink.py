@@ -175,7 +175,9 @@ def _ids_in(body: bytes) -> set[str] | Failure:
     )
     try:
         data: object = json.loads(body)
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    # ValueError also covers a number too long to convert; RecursionError is
+    # what deep nesting raises.
+    except (ValueError, RecursionError):
         return unreadable
     rows = _field(data, "data")
     if not isinstance(rows, list):

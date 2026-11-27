@@ -88,8 +88,10 @@ class FileTraceCursor:
         if not text:
             return {}
         try:
-            data = json.loads(text)
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            data = json.loads(text, object_pairs_hook=_unique_keys)
+        # ValueError also covers a number too long to convert and a key twice;
+        # RecursionError is what deep nesting raises.
+        except (ValueError, RecursionError) as error:
             raise _NotACursor from error
         return _cursors_of(data)
 
@@ -106,7 +108,10 @@ class FileTraceCursor:
         try:
             # A leftover from a killed write may have been made another way.
             os.fchmod(descriptor, 0o600)
-            os.write(descriptor, canonical_json(data).encode())
+            left = canonical_json(data).encode()
+            # A write to a nearly full disk may take only part of the bytes.
+            while left:
+                left = left[os.write(descriptor, left) :]
         finally:
             os.close(descriptor)
         os.replace(new, self._folder / _FILE)
@@ -171,3 +176,11 @@ def _mark_of(entry: object) -> CursorMark:
 def _whole(value: object) -> bool:
     # True and False are whole numbers to Python, and never a position here.
     return type(value) is int and 0 <= value <= _LARGEST
+
+
+def _unique_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """Make an object of `pairs`, refusing a key given twice."""
+    made = dict(pairs)
+    if len(made) != len(pairs):
+        raise ValueError("a key is given twice")
+    return made

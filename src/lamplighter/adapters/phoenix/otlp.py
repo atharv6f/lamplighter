@@ -35,7 +35,8 @@ def encoded(spans: Sequence[Span], project: str) -> bytes:
 
     Phoenix picks the project from the resource attribute
     `openinference.project.name`. Raises ValueError on an attribute value of
-    a type a span never holds, which is a bug in whoever made the span.
+    a type a span never holds, or on a number or time outside what the wire
+    format holds, which is a bug in whoever made the span.
     """
     resource = Resource(
         attributes=[
