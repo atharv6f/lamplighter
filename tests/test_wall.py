@@ -162,6 +162,17 @@ def test_a_real_folder_in_the_home_folder_cannot_be_listed(place: Place) -> None
     assert exit_code_only(place, f'/bin/ls "{library}"') != 0
 
 
+def test_a_command_cannot_tell_a_home_folder_from_a_missing_one(
+    place: Place,
+) -> None:
+    # A rule that let a command read any folder's details would make the
+    # first answer 0, and tell it which folders a home folder holds.
+    there = exit_code_only(place, f'test -d "{place.beside}"')
+    missing = exit_code_only(place, f'test -d "{place.beside}-missing"')
+    assert place.beside.is_dir()
+    assert there == missing == 1
+
+
 def test_a_grandchild_cannot_write_outside(place: Place) -> None:
     target = place.beside / "grandchild"
     place.shell(f'(/bin/sh -c "/usr/bin/touch {target}") & wait')
