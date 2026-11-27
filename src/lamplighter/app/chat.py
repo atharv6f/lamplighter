@@ -44,7 +44,7 @@ from lamplighter.ports import (
 
 LOCK_HELD = "Another lamplighter process is using this store."
 UNSETTLED = (
-    "{n} actions have an outcome that is not known."
+    "Actions whose outcome is not known: {n}."
     " List them with: lamplighter store sessions"
 )
 NO_WALL = (

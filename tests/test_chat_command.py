@@ -288,7 +288,7 @@ def test_an_action_whose_outcome_is_not_known_is_counted_and_the_chat_starts(
     assert UNSETTLED.format(n=1) in screen.splitlines()
     assert "Answer 1." in screen
     assert UNSETTLED.format(n=1) == (
-        "1 actions have an outcome that is not known."
+        "Actions whose outcome is not known: 1."
         " List them with: lamplighter store sessions"
     )
 
