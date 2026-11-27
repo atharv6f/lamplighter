@@ -1,7 +1,9 @@
 """The promises of the tool port, checked on every provider with the same tests."""
 
 import asyncio
+import threading
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -23,6 +25,7 @@ from lamplighter.ports import (
     ToolResult,
     ToolSpec,
 )
+from tests.builtin_kit import tools_on
 from tests.waiting_clock import WaitingClock, settle
 
 type Call = tuple[str, JsonObject]
@@ -33,7 +36,9 @@ class Made:
     """A provider on a world of its own, and how to look at that world.
 
     `snapshot` gives what a change would alter. `elsewhere` is a provider of
-    the same kind that works in another place.
+    the same kind that works in another place. `hold` makes the next apply
+    wait until the clock moves on by the change's `hold_s`, for a provider
+    whose changes do not wait on the clock by themselves.
     """
 
     tools: ToolProvider
@@ -41,6 +46,7 @@ class Made:
     clock: WaitingClock
     elsewhere: ToolProvider | None = None
     disturb: Callable[[], None] = lambda: None
+    hold: Callable[[], None] = lambda: None
 
 
 @dataclass(frozen=True)
@@ -65,7 +71,7 @@ class ToolKind:
     make: Callable[[Path, WaitingClock], Made]
     read: Call
     bad: Call
-    slow: Call
+    slow: Call | None = None
     change: Change | None = None
     taints: tuple[str, ...] = field(default=())
 
@@ -123,6 +129,52 @@ def _world(folder: Path, clock: WaitingClock) -> Made:
     )
 
 
+HOLD_S = 5
+
+
+def _builtin(folder: Path, clock: WaitingClock) -> Made:
+    work, other = folder / "work", folder / "other"
+    for made in (work, other):
+        made.mkdir()
+        (made / "tea.txt").write_text("green\n")
+
+    def snapshot() -> object:
+        return {
+            path.relative_to(work).as_posix(): path.read_bytes()
+            for path in sorted(work.rglob("*"))
+            if path.is_file()
+        }
+
+    def disturb() -> None:
+        (work / "tea.txt").write_text("black, put by hand\n")
+
+    kept: list[asyncio.Future[None]] = []
+
+    def hold() -> None:
+        # The work of a file tool runs in a worker thread. With the only
+        # worker busy until the clock moves on, the apply waits too.
+        release = threading.Event()
+        pool = ThreadPoolExecutor(max_workers=1)
+        asyncio.get_running_loop().set_default_executor(pool)
+        # Bounded, so a failing test ends instead of waiting for the worker.
+        pool.submit(release.wait, 10)
+
+        async def let_go() -> None:
+            await clock.sleep(HOLD_S)
+            release.set()
+
+        kept.append(asyncio.ensure_future(let_go()))
+
+    return Made(
+        tools_on(work.resolve()),
+        snapshot,
+        clock,
+        elsewhere=tools_on(other.resolve()),
+        disturb=disturb,
+        hold=hold,
+    )
+
+
 KINDS = {
     "scripted": ToolKind(
         make=_scripted,
@@ -141,7 +193,6 @@ KINDS = {
         make=_world,
         read=("note", {"n": 1}),
         bad=("big", {"size": 0}),
-        slow=("note", {"n": 2}),
         change=Change(
             call=("put", {"name": "tea", "text": "mint"}),
             held=("slow_put", {"name": "tea", "text": "mint"}),
@@ -150,9 +201,23 @@ KINDS = {
         ),
         taints=("page",),
     ),
+    "built-in": ToolKind(
+        make=_builtin,
+        read=("read_file", {"path": "tea.txt"}),
+        bad=("read_file", {"path": 7}),
+        change=Change(
+            call=("write_file", {"path": "tea.txt", "content": "mint\n"}),
+            held=("write_file", {"path": "tea.txt", "content": "mint\n"}),
+            hold_s=HOLD_S,
+            stubborn=(
+                "edit_file",
+                {"path": "tea.txt", "old_text": "green", "new_text": "mint"},
+            ),
+        ),
+    ),
 }
 WITH_CHANGES = {name: kind for name, kind in KINDS.items() if kind.change}
-SLOW_READS = {name: kind for name, kind in KINDS.items() if kind.slow[0] != "note"}
+SLOW_READS = {name: kind for name, kind in KINDS.items() if kind.slow}
 
 
 @pytest.fixture(params=list(KINDS.values()), ids=list(KINDS))
@@ -230,6 +295,7 @@ def test_bad_arguments_give_an_error_result_and_do_not_raise(
 def test_a_read_can_be_cancelled_while_it_runs(slow: ToolKind, tmp_path: Path) -> None:
     async def scene() -> None:
         made = slow.make(tmp_path, WaitingClock())
+        assert slow.slow is not None
         task = asyncio.create_task(made.tools.call(*slow.slow))
         await settle()
         assert not task.done()
@@ -337,6 +403,7 @@ def test_check_cannot_tell_while_the_apply_of_its_change_is_at_work(
         made = changing.make(tmp_path, WaitingClock())
         plan = await _planned(made, change.held)
         assert plan.probe is not None
+        made.hold()
         task = asyncio.create_task(made.tools.apply(*change.held, plan))
         await settle()
         assert not task.done()
@@ -357,6 +424,7 @@ def test_a_cancelled_apply_that_goes_on_still_answers_truly(
         made = changing.make(tmp_path, WaitingClock())
         before = made.snapshot()
         plan = await _planned(made, change.stubborn)
+        made.hold()
         task = asyncio.create_task(made.tools.apply(*change.stubborn, plan))
         await settle()
         task.cancel()

@@ -1,0 +1,35 @@
+"""The settings the built-in tools read, and the environment a command gets."""
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True, slots=True)
+class ToolSettings:
+    """The `[tools]` section, with the two folders as resolved paths.
+
+    `shell_path` is the PATH a command gets. A shell call runs for
+    `shell_default_seconds` unless it asks for up to `shell_max_seconds`.
+    `output_cap_chars` is the cap of every tool.
+    """
+
+    work_dir: str
+    scratch_dir: str
+    shell_path: str
+    shell_default_seconds: int
+    shell_max_seconds: int
+    output_cap_chars: int
+
+
+def command_env(settings: ToolSettings) -> dict[str, str]:
+    """Give the six variables a command gets, and nothing of the harness's own.
+
+    The harness's environment holds the API key, so none of it is passed on.
+    """
+    return {
+        "PATH": settings.shell_path,
+        "HOME": f"{settings.scratch_dir}/home",
+        "TMPDIR": f"{settings.scratch_dir}/tmp",
+        "LANG": "en_US.UTF-8",
+        "TERM": "dumb",
+        "NO_COLOR": "1",
+    }
