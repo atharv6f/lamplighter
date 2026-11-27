@@ -19,7 +19,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-import httpx
 import pytest
 
 from lamplighter.adapters import (
@@ -57,7 +56,7 @@ from lamplighter.ports import (
     ToolResult,
     utc_text,
 )
-from tests.builtin_kit import NO_WEB
+from tests.builtin_kit import NO_WEB, PAGE_URL, served_page
 from tests.stub_tools import StubTools
 from tests.tooling_kit import with_tool_folders
 
@@ -65,14 +64,6 @@ pytestmark = pytest.mark.live
 
 SETTINGS = Path(__file__).parents[2] / "lamplighter.toml"
 SESSION = "live-loop"
-# A made-up public address and name for the page the test serves itself.
-PAGE_ADDRESS = "93.184.216.34"
-PAGE_URL = "http://made-up-lamplighter.example/"
-PAGE = (
-    "<html><head><title>Made-up page</title></head><body>"
-    "<p>The secret word on this page is periwinkle.</p></body></html>"
-)
-
 FILE_ASK = (
     "Write the file kettle.txt with the one line: The kettle is blue."
     " Then read it back with read_file. Then change the word blue to green"
@@ -115,24 +106,6 @@ def behind_the_wall(config: Config) -> Executor:
 @pytest.fixture
 def walled() -> Walled:
     return behind_the_wall
-
-
-def served_page() -> WebAccess:
-    """A network on which the made-up name leads to the page, and nothing else."""
-
-    async def resolve(host: str, port: int) -> tuple[str, ...]:
-        assert host == httpx.URL(PAGE_URL).host
-        return (PAGE_ADDRESS,)
-
-    def answer(request: httpx.Request) -> httpx.Response:
-        assert request.url.host == PAGE_ADDRESS
-        return httpx.Response(
-            200,
-            headers={"content-type": "text/html; charset=utf-8"},
-            stream=httpx.ByteStream(PAGE.encode()),
-        )
-
-    return WebAccess(resolve, lambda: httpx.MockTransport(answer))
 
 
 def typed(native_id: str, text: str) -> Inbound:

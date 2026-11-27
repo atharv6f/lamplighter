@@ -72,8 +72,9 @@ from tests.port_counter import (
     Counter,
     When,
 )
+from tests.real_folder import RealFolder, new_folder
 from tests.run_history import SESSION, SPEC
-from tests.waiting_clock import JumpingClock
+from tests.waiting_clock import JumpingClock, WaitingClock
 
 type Point = tuple[int, When]
 type Turn = ScriptedReply | ScriptedBreak
@@ -87,9 +88,9 @@ INTERRUPTED_ANSWERS = {
     "not_run",
     "unconfirmed",
 }
-# The changes whose row may be left unknown: one has no probe, and the other
+# The changes whose row may be left unknown: two have no probe, and the other
 # ignores its cancel, so its check is skipped while it may still be running.
-MAY_STAY_UNKNOWN = {"launch", "stubborn_put"}
+MAY_STAY_UNKNOWN = {"launch", "shell", "stubborn_put"}
 
 
 class Killed(BaseException):
@@ -116,7 +117,11 @@ class Scenario:
     order. `during_tool` arrives when the tool named `arrives_on` starts.
     `spec_after` is the spec of every process after the first, as when the
     settings change at a restart. `tools` picks the layer of tools: notes
-    that only read, or the made-up world that reads and changes.
+    that only read, the made-up world that reads and changes, or the
+    built-in tools on a real folder. `clock` says whether time jumps
+    whenever every task waits, or stands still. The built-in tools wait on
+    threads and processes, which a jump would take for a long wait, so for
+    them time stands, except where a command is meant to outlast a limit.
     """
 
     name: str
@@ -126,7 +131,8 @@ class Scenario:
     during_tool: Inbound | None = None
     arrives_on: str = "wait"
     spec_after: RunSpec | None = None
-    tools: Literal["notes", "world"] = "notes"
+    tools: Literal["notes", "world", "folder"] = "notes"
+    clock: Literal["jumping", "still"] = "jumping"
 
 
 @dataclass
@@ -137,17 +143,25 @@ class World:
     channel: ScriptedChannel = field(
         default_factory=lambda: ScriptedChannel([], JumpingClock())
     )
-    clock: JumpingClock = field(default_factory=JumpingClock)
+    clock: WaitingClock = field(default_factory=JumpingClock)
     ids: CountingIds = field(default_factory=CountingIds)
     started: list[tuple[str, str]] = field(default_factory=list[tuple[str, str]])
     processes: int = 0
     made: MadeUpWorld = field(default_factory=MadeUpWorld)
     rows: dict[int, Effect] = field(default_factory=dict[int, Effect])
+    folder: RealFolder | None = None
 
     @property
     def starts(self) -> list[tuple[str, str]]:
-        """Every tool start, of the notes and of the made-up world."""
-        return self.started + self.made.started
+        """Every tool start, of the notes, the made-up world and the folder."""
+        folder = [] if self.folder is None else self.folder.started
+        return self.started + self.made.started + folder
+
+    @property
+    def changes(self) -> list[tuple[str, str]]:
+        """Every change, of the made-up world and of the folder."""
+        folder = [] if self.folder is None else self.folder.changed
+        return self.made.changed + folder
 
 
 def answers(script: Mapping[str, Sequence[Turn]]) -> Choose:
@@ -272,7 +286,7 @@ async def _one_process(
     tools: ToolProvider = (
         _tools(world, arrival)
         if scenario.tools == "notes"
-        else ArrivingTools(made, arrival)
+        else ArrivingTools(_changing(world, made), arrival)
     )
     deps = Deps(
         log=CountedLog(stores.log, counter),
@@ -303,6 +317,12 @@ async def _one_process(
         made.gone()
 
 
+def _changing(world: World, made: WorldTools) -> ToolProvider:
+    if world.folder is None:
+        return made
+    return world.folder.tools(world.stores.blobs)
+
+
 def run_process(
     world: World,
     scenario: Scenario,
@@ -323,12 +343,17 @@ def run_process(
     counter = Counter()
     with contextlib.suppress(Killed):
         asyncio.run(_one_process(world, scenario, spec, kill_at, counter, fail_at))
+    if world.folder is not None:
+        world.folder.release()
     return counter
 
 
 def new_world(scenario: Scenario) -> World:
     """Give a world with the scenario's messages waiting in the inbox."""
-    world = World()
+    world = World(
+        clock=JumpingClock() if scenario.clock == "jumping" else WaitingClock(),
+        folder=new_folder() if scenario.tools == "folder" else None,
+    )
 
     async def fill() -> None:
         for made in scenario.waiting:
@@ -377,7 +402,10 @@ def what_is_wrong(world: World, scenario: Scenario) -> list[str]:
         messages += any(name == scenario.arrives_on for name, _ in world.starts)
     stores = ended(world)
     wrong = broken_rules(stores, world.starts, messages) + _replies(stores)
-    return wrong + changes_wrong(stores.events, world.rows, world.made)
+    wrong += changes_wrong(stores.events, world.rows, world.changes)
+    if world.folder is not None:
+        wrong += world.folder.wrong(world.rows)
+    return wrong
 
 
 def broken_rules(
@@ -523,9 +551,9 @@ def call(call_id: str, name: str, **arguments: object) -> ToolCallPart:
 
 
 class ArrivingTools:
-    """The made-up world's tools, with the scenario's arrival as a tool starts."""
+    """Tools that change something, with the scenario's arrival as a tool starts."""
 
-    def __init__(self, inner: WorldTools, arrival: Arrival) -> None:
+    def __init__(self, inner: ToolProvider, arrival: Arrival) -> None:
         self._inner = inner
         self._arrival = arrival
 
@@ -589,9 +617,14 @@ class MirroredLedger:
 
 
 def changes_wrong(
-    events: Sequence[Event], rows: Mapping[int, Effect], made: MadeUpWorld
+    events: Sequence[Event],
+    rows: Mapping[int, Effect],
+    changed: Sequence[tuple[str, str]],
 ) -> list[str]:
-    """Give each rule about changes that the log, the ledger and the world break."""
+    """Give each rule about changes that the log, the ledger and the world break.
+
+    `changed` holds each change the world saw, as its tool and arguments.
+    """
     calls = _whole_calls(events)
     intents = {
         int(str(e.payload["effect_id"])): str(e.payload["call_id"])
@@ -610,7 +643,7 @@ def changes_wrong(
             wrong.append(f"call {call_id} has a result and its row is intended")
     for row in rows.values():
         wrong += _row_wrong(row, events, intents, results)
-    return wrong + _world_wrong(rows, calls, intents, results, made)
+    return wrong + _world_wrong(rows, calls, intents, results, changed)
 
 
 def _row_wrong(
@@ -643,14 +676,14 @@ def _world_wrong(
     calls: Mapping[str, tuple[str, str]],
     intents: Mapping[int, str],
     results: Mapping[str, JsonObject],
-    made: MadeUpWorld,
+    changes: Sequence[tuple[str, str]],
 ) -> list[str]:
     # A change is known by its tool and arguments. Each row changes the
     # world at most once, so of the rows with one key, no more say it
     # happened than there were changes, and no more say it did not than
     # there were rows that changed nothing. The rows and the texts are
     # counted apart, because each is told to someone.
-    changed = Tally(made.changed)
+    changed = Tally(changes)
     begun = Tally(_key(row) for row in rows.values())
     started = Tally(calls[call_id] for call_id in intents.values())
     by_row, by_text = _claims(rows, intents, results)

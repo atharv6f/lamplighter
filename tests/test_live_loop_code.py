@@ -16,6 +16,7 @@ import pytest
 from lamplighter.adapters import ScriptedReply, SystemClock
 from lamplighter.app.config import Config, load_config
 from lamplighter.ports import Executor, JsonObject, TextPart, ToolCallPart, Usage
+from tests.builtin_kit import PAGE_URL
 from tests.direct_executor import DirectExecutor
 from tests.kill_kit import Turn, answers
 from tests.live import test_loop as live
@@ -40,7 +41,7 @@ READ = call("read_file", path="kettle.txt")
 EDIT = call("edit_file", path="kettle.txt", old_text="blue", new_text="green")
 WRITE_NOTE = call("write_file", path="note.txt", content="Water the plants.\n")
 RUN = call("shell", command="echo made-up-$((6*7))")
-FETCH = call("web_fetch", url=live.PAGE_URL)
+FETCH = call("web_fetch", url=PAGE_URL)
 CLOCK = call("current_time")
 DONE = says("Done.")
 

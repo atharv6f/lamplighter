@@ -51,6 +51,33 @@ def _no_answer(request: httpx.Request) -> httpx.Response:
 NO_WEB = WebAccess(resolve=_no_name, transport=lambda: httpx.MockTransport(_no_answer))
 
 
+# A made-up public address and name for a page the tests serve themselves.
+PAGE_ADDRESS = "93.184.216.34"
+PAGE_URL = "http://made-up-lamplighter.example/"
+PAGE = (
+    "<html><head><title>Made-up page</title></head><body>"
+    "<p>The secret word on this page is periwinkle.</p></body></html>"
+)
+
+
+def served_page() -> WebAccess:
+    """A network on which the made-up name leads to the page, and nothing else."""
+
+    async def resolve(host: str, port: int) -> tuple[str, ...]:
+        assert host == httpx.URL(PAGE_URL).host
+        return (PAGE_ADDRESS,)
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == PAGE_ADDRESS
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html; charset=utf-8"},
+            stream=httpx.ByteStream(PAGE.encode()),
+        )
+
+    return WebAccess(resolve, lambda: httpx.MockTransport(answer))
+
+
 def tools_on(
     work: Path,
     cap: int = CAP,
