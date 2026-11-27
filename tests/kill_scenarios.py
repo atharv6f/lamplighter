@@ -57,7 +57,7 @@ STOP_FIRST = Scenario(
 MESSAGE_DURING_TOOL = Scenario(
     "a message arrives while a tool runs",
     waiting=(inbound("m1", "Wait a little."),),
-    during_wait=inbound("m2", "And note three."),
+    during_tool=inbound("m2", "And note three."),
     script={
         "Wait a little.": (calls(call("c1", "wait", seconds=5)), text("Waited.")),
         "And note three.": (calls(call("c2", "note", n=3)), text("Noted three.")),
@@ -67,7 +67,7 @@ MESSAGE_DURING_TOOL = Scenario(
 STOP_DURING_TOOL = Scenario(
     "a stop arrives while a tool runs",
     waiting=(inbound("m1", "Wait a little."),),
-    during_wait=stop("s1"),
+    during_tool=stop("s1"),
     script={"Wait a little.": (calls(call("c1", "wait", seconds=5)), text("Waited."))},
 )
 

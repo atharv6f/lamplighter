@@ -45,7 +45,7 @@ from lamplighter.ports import (
 from tests.loop_kit import MAX_RECORD_BYTES, Loop, in_memory
 from tests.model_by_request import ModelByRequest, assistant_turns
 from tests.model_samples import PROFILE
-from tests.run_history import CONFIG, SESSION, SPEC, inbound, stop
+from tests.run_history import CONFIG, SESSION, SPEC, WALL, inbound, stop
 from tests.waiting_clock import JumpingClock
 
 QUESTION = "What time is it, and can you wait two seconds?"
@@ -111,18 +111,20 @@ UNKNOWN_TEXT = "There is no tool named weather. The tools are: current_time, wai
 EXPECTED: list[tuple[object, ...]] = [
     (1, "session_started", {"channel": "terminal", "conversation": SESSION},
      None, None, None, None, FIRST_AT),
-    (2, "run_started", {"config_id": CONFIG, "trigger": "message"},
+    (2, "run_started", {"config_id": CONFIG, "trigger": "message", "wall": WALL},
      RUN, None, MESSAGE_ID, None, FIRST_AT),
     (3, "user_message", {"text": QUESTION}, RUN, None, None, None, FIRST_AT),
     (4, "model_request", {"deadline_ms": 600_000}, RUN, 1, None, None, FIRST_AT),
     (5, "model_response",
      reply_payload(CURRENT_TIME, WAIT, reason="tool_calls"),
      RUN, 1, eid(4), 0, FIRST_AT),
-    (6, "tool_intent", {"call_id": "call_1", "name": "current_time"},
+    (6, "tool_intent",
+     {"call_id": "call_1", "name": "current_time", "action_class": "read"},
      RUN, 1, eid(5), None, FIRST_AT),
     (7, "tool_result", {"call_id": "call_1", "text": FIRST_AT, "is_error": False},
      RUN, 1, eid(6), 0, FIRST_AT),
-    (8, "tool_intent", {"call_id": "call_2", "name": "wait"},
+    (8, "tool_intent",
+     {"call_id": "call_2", "name": "wait", "action_class": "read"},
      RUN, 1, eid(5), None, FIRST_AT),
     (9, "tool_result",
      {"call_id": "call_2", "text": "Waited 2 seconds.", "is_error": False},
@@ -181,7 +183,7 @@ def test_the_model_sees_each_result_and_the_tool_list() -> None:
         assert len(model.requests) == 3
         first = model.requests[0]
         assert first.system == (SPEC.system,)
-        assert first.tools == loop.tools.list_tools()
+        assert first.tools == tuple(e.spec for e in loop.tools.list_tools())
         assert first.max_output == SPEC.model_max_output
         assert first.retries == SPEC.model_retries
         assert first.cache_hints == ()
@@ -427,7 +429,7 @@ def test_a_message_during_a_run_joins_the_next_request_after_the_results() -> No
         async def wait_and_hear(arguments: JsonObject) -> ToolResult:
             del arguments
             await ask(loop_box[0], "n2", LATE)
-            return ToolResult(text="Waited.", is_error=False)
+            return ToolResult(text="Waited.", is_error=False, effect="none")
 
         def one_wait(request: ModelRequest) -> ScriptedReply:
             if assistant_turns(request) == 0:

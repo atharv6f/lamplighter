@@ -8,9 +8,10 @@ from lamplighter.adapters import (
     ScriptedReply,
     ScriptedTool,
     ScriptedTools,
-    StubTools,
 )
 from lamplighter.adapters.in_memory import (
+    InMemoryBlobStore,
+    InMemoryEffectLedger,
     InMemoryEventLog,
     InMemoryInbox,
     InMemoryOutbox,
@@ -34,9 +35,11 @@ from lamplighter.ports import (
 )
 from tests.model_by_request import Choose
 from tests.run_history import SESSION, stop
+from tests.stub_tools import StubTools
 from tests.waiting_clock import JumpingClock
 
 MAX_RECORD_BYTES = 200_000
+MAX_BLOB_BYTES = 64 * 1024 * 1024
 
 
 @dataclass
@@ -48,6 +51,8 @@ class Loop:
     outbox: Outbox
     model: ModelClient
     tools: ToolProvider
+    ledger: InMemoryEffectLedger
+    blobs: InMemoryBlobStore
     clock: Clock
     ids: CountingIds
     running: RunningSessions
@@ -61,6 +66,8 @@ class Loop:
             outbox=self.outbox,
             model=self.model,
             tools=self.tools,
+            ledger=self.ledger,
+            blobs=self.blobs,
             clock=self.clock,
             ids=self.ids,
             observers=self.observers,
@@ -96,6 +103,8 @@ def in_memory(
         outbox=InMemoryOutbox(MAX_RECORD_BYTES),
         model=model,
         tools=tools or StubTools(clock),
+        ledger=InMemoryEffectLedger(clock, MAX_RECORD_BYTES),
+        blobs=InMemoryBlobStore(MAX_BLOB_BYTES),
         clock=clock,
         ids=CountingIds(),
         running=RunningSessions(),
@@ -134,12 +143,14 @@ def note_tools(clock: Clock, seconds: float = 0.0) -> ScriptedTools:
     async def note(arguments: JsonObject) -> ToolResult:
         if seconds:
             await clock.sleep(seconds)
-        return ToolResult(text=f"Noted {arguments.get('n')}.", is_error=False)
+        return ToolResult(
+            text=f"Noted {arguments.get('n')}.", is_error=False, effect="none"
+        )
 
     async def tick(arguments: JsonObject) -> ToolResult:
         del arguments
         ticks[0] += 1
-        return ToolResult(text=f"Tick {ticks[0]}.", is_error=False)
+        return ToolResult(text=f"Tick {ticks[0]}.", is_error=False, effect="none")
 
     return ScriptedTools([ScriptedTool(NOTE_SPEC, note), ScriptedTool(TICK_SPEC, tick)])
 

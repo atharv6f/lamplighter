@@ -92,6 +92,13 @@ def test_a_second_begin_of_one_action_finds_the_first_row(ledger: EffectLedger) 
     assert len(effects(ledger)) == 1
 
 
+def test_a_begin_that_finds_its_row_gives_no_id_away(ledger: EffectLedger) -> None:
+    first = begun(run(ledger.begin(action(), None, None)))
+    begun(run(ledger.begin(action(), None, None)))
+    later = begun(run(ledger.begin(action(call_index=1), None, None)))
+    assert later.effect.effect_id == first.effect.effect_id + 1
+
+
 def test_a_second_begin_finds_the_first_row_when_the_args_hold_a_tuple(
     ledger: EffectLedger,
 ) -> None:

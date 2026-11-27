@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from tests.crash.checks import check_store, read_report
+from tests.group_kill import kill_group
 
 ROOT = Path(__file__).parents[2]
 
@@ -55,7 +56,7 @@ def run_planted(mode: str, folder: Path) -> str:
     try:
         _, errors = child.communicate(timeout=60)
     finally:
-        _kill(child)
+        kill_group(child)
     assert child.returncode == -signal.SIGKILL, errors.decode()
     return report.read_text() if report.exists() else ""
 
@@ -71,7 +72,7 @@ def run_random_kills(folder: Path, kills: int, seed: int) -> KillRun:
             _wait_for_ready(child, report, run + 1)
             time.sleep(chance.uniform(*WAIT_MS) / 1000)
         finally:
-            _kill(child)
+            kill_group(child)
         batches = check_store(folder, read_report(report))
     reported = read_report(report)
     return KillRun(
@@ -88,9 +89,3 @@ def _wait_for_ready(child: subprocess.Popen[bytes], report: Path, runs: int) -> 
             raise AssertionError(child.stderr.read().decode() if child.stderr else "")
         time.sleep(0.002)
     raise AssertionError("the child never said it was ready")
-
-
-def _kill(child: subprocess.Popen[bytes]) -> None:
-    if child.poll() is None:
-        os.killpg(child.pid, signal.SIGKILL)
-    child.wait()

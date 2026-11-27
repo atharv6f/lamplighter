@@ -206,3 +206,50 @@ def test_a_new_model_request_leaves_no_last_reply_until_its_own_is_saved() -> No
     assert view(history).last_reply is not None
     history.request()
     assert view(history).last_reply is None
+
+
+def test_an_open_call_knows_its_reply_its_place_and_each_of_its_intents() -> None:
+    history = History().start()
+    reply = history.step_with(call("call_a"), call("call_b", seconds=2))
+    first = history.intent(call("call_b"), "read")
+    second = history.intent(call("call_b"), "read")
+    made = view(history)
+    a, b = made.open_calls
+    assert (a.reply_seq, a.place, a.intents) == (reply.seq, 0, ())
+    assert (b.reply_seq, b.place) == (reply.seq, 1)
+    assert [(i.event_id, i.action_class) for i in b.intents] == [
+        (first.event_id, "read"),
+        (second.event_id, "read"),
+    ]
+    assert b.intents[0].payload == first.payload
+    assert b.intent_id == second.event_id
+
+
+def test_an_intent_with_no_class_leaves_its_call_open_with_that_intent() -> None:
+    history = History().start()
+    history.step_with(call("call_a"))
+    history.intent(call("call_a"))
+    (open_call,) = view(history).open_calls
+    assert [i.action_class for i in open_call.intents] == [None]
+
+
+def test_two_calls_with_one_id_keep_their_intents_and_results_apart() -> None:
+    history = History().start()
+    history.step_with(call("call_a"), call("call_a", seconds=2))
+    history.ran(call("call_a"))
+    made = view(history)
+    (second,) = made.open_calls
+    assert (second.place, second.intents) == (1, ())
+    assert second.call == call("call_a", seconds=2)
+    later = history.intent(call("call_a"), "read")
+    (second,) = view(history).open_calls
+    assert second.intent_id == later.event_id
+
+
+def test_an_intent_whose_class_is_not_a_text_does_not_fit() -> None:
+    history = History().start()
+    history.step_with(call("call_a"))
+    history.add("tool_intent", {"call_id": "call_a", "name": "wait", "action_class": 3})
+    made = view_of(history.events)
+    assert isinstance(made, Failure)
+    assert made.kind == "fatal"

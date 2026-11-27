@@ -249,9 +249,8 @@ def test_after_tool_is_called_for_a_call_cut_short_with_its_harness_result() -> 
     asyncio.run(scenario())
 
 
-def test_no_tool_observer_sees_a_call_answered_interrupted() -> None:
+def test_no_tool_observer_sees_a_read_answered_interrupted_after_two_starts() -> None:
     async def scenario() -> None:
-        seen: Seen = []
         loop, _, _ = loop_with(
             long_note(1), calls(note("c1")), DONE, clock=JumpingClock()
         )
@@ -260,6 +259,14 @@ def test_no_tool_observer_sees_a_call_answered_interrupted() -> None:
         loop.log = FailingLog(inner, failing=5)
         await ask(loop)
         assert not isinstance(await run_turn(SESSION, SPEC, loop.deps), TurnEnd)
+        # The read is run once more, and its result is lost again: the
+        # second intent is the first append, the result the second.
+        again: Seen = []
+        loop.log = FailingLog(inner, failing=2)
+        loop.observers = recording(again, "a")
+        assert not isinstance(await run_turn(SESSION, SPEC, loop.deps), TurnEnd)
+        assert [name for name, _ in again] == ["a.before_tool"]
+        seen: Seen = []
         loop.log = inner
         loop.observers = recording(seen, "a")
         ended = await run_turn(SESSION, SPEC, loop.deps)

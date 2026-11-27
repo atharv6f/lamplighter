@@ -1,28 +1,29 @@
 """A store written at layout version 2 must read the same under this code.
 
-It holds every event type the loop writes and an outbox row in each
-state, as `tests/frozen_v2_samples.py` made them.
+It holds every event type the loop wrote when the file was made, and an
+outbox row in each state. The loop has changed since: an intent now has a
+class, and a read cut off by a kill is run once more. So the file is no
+longer compared with what this code writes. It is read back row for row,
+and its intent with no class is answered as it was then.
 """
 
+import dataclasses
+import json
 import sqlite3
 from dataclasses import replace
 from pathlib import Path
 
 from lamplighter.adapters import ScriptedChannel
-from lamplighter.adapters.in_memory import (
-    InMemoryEventLog,
-    InMemoryInbox,
-    InMemoryOutbox,
-)
 from lamplighter.adapters.sqlite import SqliteEventLog, SqliteInbox, SqliteOutbox
 from lamplighter.core import deliver_due, rebuild_messages, run_turn
-from lamplighter.ports import EventLog, Failure, Inbox, Outbox
+from lamplighter.core.next_move import AnswerCall, RunCall, next_move
+from lamplighter.core.run_view import RunView, view_of
+from lamplighter.ports import Event, EventLog, Failure, Inbox, Outbox
 from tests.fake_clock import FakeClock
-from tests.frozen_v2_samples import write_v2_samples
 from tests.kill_kit import answers
 from tests.loop_kit import in_memory
 from tests.model_by_request import ModelByRequest
-from tests.run_history import SPEC
+from tests.run_history import SPEC, TOOLS
 from tests.sqlite.helpers import opened, run
 
 FROZEN = Path(__file__).parents[1] / "stores" / "version_2.sql"
@@ -58,31 +59,74 @@ def stores(connection: sqlite3.Connection) -> tuple[EventLog, Inbox, Outbox]:
     )
 
 
-async def everything(log: EventLog, inbox: Inbox, outbox: Outbox) -> tuple[object, ...]:
-    return (
-        await log.read("sess-a", 0),
-        await log.read("sess-b", 0),
-        await log.tail(0, 100),
-        await log.sessions(None),
-        await inbox.pending(),
-        await outbox.due(),
-    )
+def rows_as_events(connection: sqlite3.Connection, session: str) -> list[Event]:
+    """Build the events of a session from its rows, without the adapter."""
+    rows = connection.execute(
+        "SELECT session_id, seq, pos, event_id, type, v, payload, at, run_id,"
+        " step, duration_ms, cause FROM events WHERE session_id = ? ORDER BY seq",
+        (session,),
+    ).fetchall()
+    return [
+        Event(
+            session_id=row[0],
+            seq=row[1],
+            pos=row[2],
+            event_id=row[3],
+            type=row[4],
+            v=row[5],
+            payload=json.loads(row[6]),
+            at=row[7],
+            run_id=row[8],
+            step=row[9],
+            duration_ms=row[10],
+            cause=row[11],
+        )
+        for row in rows
+    ]
 
 
-def test_the_frozen_version_2_store_reads_as_this_code_would_write_it(
+def test_the_frozen_version_2_store_reads_back_what_its_rows_hold(
     tmp_path: Path,
 ) -> None:
     connection = frozen(tmp_path)
     assert connection.execute("PRAGMA user_version").fetchone() == (2,)
-    from_file = run(everything(*stores(connection)))
-    fakes = (
-        InMemoryEventLog({}, LIMIT),
-        InMemoryInbox(LIMIT),
-        InMemoryOutbox(LIMIT),
+    log, inbox, _ = stores(connection)
+    every: list[Event] = []
+    for session in ("sess-a", "sess-b"):
+        read = run(log.read(session, 0))
+        assert not isinstance(read, Failure), read
+        assert list(read) == rows_as_events(connection, session)
+        every.extend(read)
+    assert run(log.tail(0, 100)) == tuple(sorted(every, key=lambda e: e.pos))
+    sessions = run(log.sessions(None))
+    assert not isinstance(sessions, Failure)
+    assert [(info.session_id, info.state) for info in sessions] == [
+        ("sess-a", "idle"),
+        ("sess-b", "idle"),
+    ]
+    assert run(inbox.pending()) == ()
+
+
+def test_its_intent_with_no_class_is_answered_interrupted_and_not_run_again(
+    tmp_path: Path,
+) -> None:
+    log, _, _ = stores(frozen(tmp_path))
+    events = run(log.read("sess-b", 0))
+    assert not isinstance(events, Failure)
+    (intent,) = [e for e in events if e.type == "tool_intent"]
+    assert "action_class" not in intent.payload
+    cut_off = view_of(events[: intent.seq])
+    assert isinstance(cut_off, RunView)
+    answered = next_move(cut_off, (), SPEC, TOOLS)
+    assert isinstance(answered, AnswerCall)
+    assert answered.harness == "interrupted"
+    # The same intent with a class would be run once more: the class decides.
+    classed = dataclasses.replace(
+        intent, payload={**intent.payload, "action_class": "read"}
     )
-    run(write_v2_samples(*fakes))
-    assert not any(isinstance(part, Failure) for part in from_file), from_file
-    assert from_file == run(everything(*fakes))
+    with_class = view_of((*events[: intent.seq - 1], classed))
+    assert isinstance(with_class, RunView)
+    assert isinstance(next_move(with_class, (), SPEC, TOOLS), RunCall)
 
 
 def test_it_holds_every_event_type_and_every_outbox_state(tmp_path: Path) -> None:

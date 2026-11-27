@@ -39,6 +39,13 @@ from lamplighter.ports.event_log import (
     Upcaster,
     Upcasters,
 )
+from lamplighter.ports.executor import (
+    Command,
+    ExecResult,
+    Executor,
+    Profile,
+    refused_command,
+)
 from lamplighter.ports.failure import Failure, FailureEffect, FailureKind
 from lamplighter.ports.id_source import IdSource
 from lamplighter.ports.inbound import Inbound, Sender
@@ -85,9 +92,16 @@ from lamplighter.ports.outbox_check import (
     check_receipt,
     unknown_outbound,
 )
+from lamplighter.ports.output_id import output_id, read_output_id
 from lamplighter.ports.plain import from_plain, from_stored, to_plain
 from lamplighter.ports.request_check import check_request
-from lamplighter.ports.tool_provider import ToolProvider, ToolResult
+from lamplighter.ports.tool_provider import (
+    Plan,
+    ToolEffect,
+    ToolEntry,
+    ToolProvider,
+    ToolResult,
+)
 from lamplighter.ports.upcast import upcast
 from lamplighter.ports.value_rules import is_hash, is_id
 
@@ -97,6 +111,11 @@ __all__ = [
     "check_enqueue",
     "Outbox",
     "out_id_for",
+    "output_id",
+    "read_output_id",
+    "Plan",
+    "ToolEffect",
+    "ToolEntry",
     "ToolResult",
     "ToolProvider",
     "Outbound",
@@ -114,6 +133,10 @@ __all__ = [
     "Effect",
     "EffectLedger",
     "EffectResult",
+    "Command",
+    "ExecResult",
+    "Executor",
+    "Profile",
     "EffectState",
     "ErrorEvent",
     "Event",
@@ -176,6 +199,7 @@ __all__ = [
     "is_hash",
     "is_id",
     "read_saved_json",
+    "refused_command",
     "saved_json",
     "saved_size",
     "to_plain",

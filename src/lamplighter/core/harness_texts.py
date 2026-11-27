@@ -10,12 +10,23 @@ from typing import Literal
 type HarnessKind = Literal[
     "arguments_unparsed",
     "unknown_tool",
+    "arguments_invalid",
     "cut_off",
     "interrupted",
     "stopped",
     "out_of_time",
     "not_run",
+    "unconfirmed",
 ]
+
+# Why a change's outcome was not known when its result was written.
+type UnsettledReason = Literal["interrupted", "stopped", "out_of_time", "unconfirmed"]
+UNSETTLED_REASONS: tuple[UnsettledReason, ...] = (
+    "interrupted",
+    "stopped",
+    "out_of_time",
+    "unconfirmed",
+)
 
 type LimitName = Literal["steps", "seconds", "tokens", "micro_dollars"]
 
@@ -37,6 +48,14 @@ def unknown_tool(name: str, tool_names: Sequence[str]) -> str:
     return f"There is no tool named {name}. The tools are: {names}."
 
 
+def arguments_invalid(name: str, problems: Sequence[str]) -> str:
+    """Tell the model its arguments for a call do not fit the tool's schema."""
+    return (
+        f"The arguments for {name} do not fit its schema: {'; '.join(problems)}."
+        " Send the call again with arguments that fit."
+    )
+
+
 def cut_off(name: str) -> str:
     """Tell the model a call was cut by the output limit and was not run."""
     return (
@@ -47,28 +66,62 @@ def cut_off(name: str) -> str:
 
 
 def interrupted(name: str) -> str:
-    """Tell the model a call was running when the harness stopped."""
-    return (
-        f"The harness was stopped while {name} was running, and the call was not run"
-        " again. Its outcome is unknown: it may have finished, partly run, or not"
-        " run at all."
-    )
+    """Tell the model a call was cut off before its result was saved.
+
+    The run may have been cut off by a kill or by a store that failed, so
+    the sentence names neither. It is the one text for a read and a change.
+    """
+    return unsettled("interrupted", name, None)
 
 
 def stopped(name: str) -> str:
     """Tell the model a call was cut short by your stop."""
-    return (
-        f"{name} was cut short because the user stopped the run."
-        " Its outcome is unknown."
-    )
+    return unsettled("stopped", name, None)
 
 
 def out_of_time(name: str) -> str:
     """Tell the model a call was cut short by the run's time limit."""
-    return (
-        f"{name} was cut short because the run reached its time limit."
-        " Its outcome is unknown."
-    )
+    return unsettled("out_of_time", name, None)
+
+
+TOOK_EFFECT = "A check afterwards shows that it took effect."
+NO_EFFECT = (
+    "A check afterwards shows that it did not take effect: its target is as it was."
+)
+_OUTCOME_UNKNOWN = "Its outcome is unknown."
+_MAY_HAVE_RUN = (
+    "Its outcome is unknown: it may have finished, partly run, or not run at all."
+)
+
+
+def unsettled(
+    reason: UnsettledReason, name: str, found: bool | None, failure: str | None = None
+) -> str:
+    """Say why a call's outcome was not known, and what a check found after.
+
+    `found` is the check's answer, or None when there was no check or it
+    could not tell. `failure` is the error text of a tool that failed and
+    could not say whether it changed anything.
+    """
+    match reason:
+        case "interrupted":
+            opening = (
+                f"The run was cut off before the result of {name} was saved,"
+                " and the call was not run again."
+            )
+        case "stopped":
+            opening = f"{name} was cut short because the user stopped the run."
+        case "out_of_time":
+            opening = f"{name} was cut short because the run reached its time limit."
+        case "unconfirmed":
+            opening = f"{failure} It could not say whether anything was changed."
+    if found is True:
+        return f"{opening} {TOOK_EFFECT}"
+    if found is False:
+        return f"{opening} {NO_EFFECT}"
+    if reason == "interrupted":
+        return f"{opening} {_MAY_HAVE_RUN}"
+    return f"{opening} {_OUTCOME_UNKNOWN}"
 
 
 def not_run(name: str) -> str:
@@ -174,3 +227,24 @@ CONFIG_CHANGED_NOTICE = (
 
 # Added after a blank line to a reply that stopped at the output limit.
 CUT_REPLY_LINE = "[The reply was cut off before the model finished.]"
+
+
+def cut_mark(dropped: int) -> str:
+    """Give the line that stands where a cut text's middle was left out."""
+    return f"[... {dropped} characters left out here ...]"
+
+
+def saved_note(total: int, dropped: int, saved_as: str) -> str:
+    """Tell the model a result was cut, and the id of the whole text."""
+    return (
+        f"[The output was {total} characters long and {dropped} were left out."
+        f" The full output is saved as {saved_as}. Read more of it with read_output.]"
+    )
+
+
+def lost_note(total: int, dropped: int, kind: str) -> str:
+    """Tell the model a result was cut, and its whole text could not be saved."""
+    return (
+        f"[The output was {total} characters long and {dropped} were left out."
+        f" The full output could not be saved ({kind}), so it cannot be read later.]"
+    )

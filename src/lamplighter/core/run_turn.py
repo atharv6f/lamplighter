@@ -1,5 +1,8 @@
 """The loop: one call carries a session's run on, pass by pass, from what is saved."""
 
+from collections.abc import Mapping
+
+from lamplighter.core.effect_step import run_change, settle_effect
 from lamplighter.core.model_step import call_model
 from lamplighter.core.next_move import (
     AnswerCall,
@@ -11,6 +14,7 @@ from lamplighter.core.next_move import (
     Idle,
     Move,
     RunCall,
+    SettleEffect,
     StartRun,
     TakeMessages,
     next_move,
@@ -26,7 +30,7 @@ from lamplighter.core.run_ending import TurnEnd, close_run, end_run
 from lamplighter.core.run_spec import RunSpec
 from lamplighter.core.run_view import RunView, view_of
 from lamplighter.core.tool_step import answer_call, run_call
-from lamplighter.ports import Event, Failure, ToolSpec
+from lamplighter.ports import Event, Failure, ToolEntry
 
 _SOURCE = "run_turn"
 
@@ -69,8 +73,7 @@ async def run_turn(
 async def _passes(
     session_id: str, spec: RunSpec, deps: Deps
 ) -> TurnEnd | Failure | None:
-    tools = deps.tools.list_tools()
-    tool_names = frozenset(tool.name for tool in tools)
+    entries = {entry.spec.name: entry for entry in deps.tools.list_tools()}
     events: list[Event] = []
     while True:
         # Cleared before the inbox is read: a stop saved before this finds
@@ -88,13 +91,13 @@ async def _passes(
         view = view_of(events)
         if isinstance(view, Failure):
             return view
-        move = next_move(view, rows, spec, tool_names)
+        move = next_move(view, rows, spec, entries)
         if isinstance(move, Idle):
             return None
         if isinstance(move, CloseRun):
             return await close_run(session_id, view, move.ending, move.stops, deps)
         failed = await _carry_out(
-            session_id, view, move, tuple(events), tools, spec, deps
+            session_id, view, move, tuple(events), entries, spec, deps
         )
         if failed is not None:
             return failed
@@ -105,10 +108,11 @@ async def _carry_out(
     view: RunView,
     move: Move,
     events: tuple[Event, ...],
-    tools: tuple[ToolSpec, ...],
+    entries: Mapping[str, ToolEntry],
     spec: RunSpec,
     deps: Deps,
 ) -> Failure | None:
+    tools = tuple(entry.spec for entry in entries.values())
     match move:
         case FinishRouting():
             return await finish_routing(session_id, move.routes, deps)
@@ -124,8 +128,8 @@ async def _carry_out(
             return await take_messages(session_id, view, move.messages, deps)
         case CallModel():
             return await call_model(session_id, view, events, tools, spec, deps)
-        case RunCall():
-            return await run_call(session_id, view, move.call, spec, deps)
+        case RunCall() | SettleEffect():
+            return await _tool_move(session_id, view, move, entries, spec, deps)
         case AnswerCall():
             return await answer_call(
                 session_id, view, move.call, move.harness, tools, deps
@@ -134,3 +138,20 @@ async def _carry_out(
             return await end_run(session_id, view, move, deps)
         case Idle() | CloseRun():
             raise ValueError("the loop itself handles this move")
+
+
+async def _tool_move(
+    session_id: str,
+    view: RunView,
+    move: RunCall | SettleEffect,
+    entries: Mapping[str, ToolEntry],
+    spec: RunSpec,
+    deps: Deps,
+) -> Failure | None:
+    # A change is settled from its saved intent, so it needs no entry.
+    if isinstance(move, SettleEffect):
+        return await settle_effect(session_id, view, move.call, deps)
+    entry = entries[move.call.call.name]
+    if entry.action_class == "read":
+        return await run_call(session_id, view, move.call, entry, spec, deps)
+    return await run_change(session_id, view, move.call, entry, spec, deps)

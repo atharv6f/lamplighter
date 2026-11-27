@@ -5,7 +5,9 @@ from dataclasses import dataclass
 from lamplighter.core.observers import Observers
 from lamplighter.core.running_sessions import RunningSessions
 from lamplighter.ports import (
+    BlobStore,
     Clock,
+    EffectLedger,
     EventLog,
     IdSource,
     Inbox,
@@ -19,8 +21,10 @@ from lamplighter.ports import (
 class Deps:
     """Everything outside the loop that the loop reads, writes or calls.
 
-    `observers` and `running` are not ports. They touch nothing outside the
-    process, and `running` is shared by the whole of it.
+    `ledger` records every change before and after its tool runs. `blobs`
+    holds the whole text of a result that was cut. `observers` and
+    `running` are not ports. They touch nothing outside the process, and
+    `running` is shared by the whole of it.
     """
 
     log: EventLog
@@ -28,6 +32,8 @@ class Deps:
     outbox: Outbox
     model: ModelClient
     tools: ToolProvider
+    ledger: EffectLedger
+    blobs: BlobStore
     clock: Clock
     ids: IdSource
     observers: Observers

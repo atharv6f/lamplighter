@@ -1,27 +1,45 @@
-"""Tools that run functions a test gives, and note which calls started and ended."""
+"""Reads that run functions a test gives, and note which calls started and ended."""
 
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 
-from lamplighter.ports import Failure, JsonObject, ToolResult, ToolSpec
+from lamplighter.ports import (
+    Failure,
+    JsonObject,
+    Plan,
+    ToolEntry,
+    ToolResult,
+    ToolSpec,
+)
 
 _SOURCE = "ToolProvider/scripted"
+
+# The cap a scripted tool has unless a test gives another.
+SCRIPTED_CAP = 30_000
 
 type ToolRun = Callable[[JsonObject], Awaitable[ToolResult | Failure]]
 
 
 @dataclass(frozen=True, slots=True)
 class ScriptedTool:
-    """One tool: its spec, the function that answers it, and how it takes a cancel.
+    """One read: its spec, the function that answers it, and how it takes a cancel.
 
     A tool with `ignores_cancel` set goes on to its end when it is
-    cancelled, as a badly made tool might.
+    cancelled, as a badly made tool might. `taints` and `output_cap` go
+    into its entry.
     """
 
     spec: ToolSpec
     run: ToolRun
     ignores_cancel: bool = False
+    taints: bool = False
+    output_cap: int = SCRIPTED_CAP
+
+    @property
+    def entry(self) -> ToolEntry:
+        """The tool's entry, always of the class "read"."""
+        return ToolEntry(self.spec, "read", self.output_cap, self.taints)
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,7 +57,7 @@ class _Notes:
 
 
 class ScriptedTools:
-    """Runs the functions a test gave. Satisfies ToolProvider.
+    """Runs the functions a test gave, each a read. Satisfies ToolProvider.
 
     `started` and `finished` list the calls in the order they began and
     ended, so a test can see that a call never ran, or ran once.
@@ -60,9 +78,9 @@ class ScriptedTools:
         """Every call that ran to its end, in order."""
         return tuple(self._notes.finished)
 
-    def list_tools(self) -> tuple[ToolSpec, ...]:
-        """Give every spec, sorted by name."""
-        return tuple(self._tools[name].spec for name in sorted(self._tools))
+    def list_tools(self) -> tuple[ToolEntry, ...]:
+        """Give every entry, sorted by name."""
+        return tuple(self._tools[name].entry for name in sorted(self._tools))
 
     async def call(self, name: str, arguments: JsonObject) -> ToolResult | Failure:
         """Run the named tool's function, and note the start and the end."""
@@ -82,6 +100,34 @@ class ScriptedTools:
             result = await tool.run(arguments)
         self._notes.finished.append(note)
         return result
+
+    async def plan(
+        self, name: str, arguments: JsonObject
+    ) -> Plan | ToolResult | Failure:
+        """Refuse: every scripted tool is a read."""
+        del arguments
+        return _not_a_change(name)
+
+    async def apply(
+        self, name: str, arguments: JsonObject, plan: Plan
+    ) -> ToolResult | Failure:
+        """Refuse: every scripted tool is a read."""
+        del arguments, plan
+        return _not_a_change(name)
+
+    async def check(self, probe: JsonObject) -> bool | None:
+        """Give None: no scripted tool makes a probe."""
+        del probe
+        return None
+
+
+def _not_a_change(name: str) -> Failure:
+    return Failure(
+        kind="invalid_input",
+        effect="none",
+        message=f"{name} is a read, so it has no plan.",
+        source=_SOURCE,
+    )
 
 
 async def _past_any_cancel[T](work: Awaitable[T]) -> T:

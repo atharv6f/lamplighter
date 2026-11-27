@@ -7,12 +7,19 @@ the arrival sweeps make a message or a stop arrive there.
 
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, cast
 
 from lamplighter.ports import (
     Accepted,
+    Action,
+    Begun,
+    BlobHandle,
+    BlobStore,
     Channel,
     DeliveryReceipt,
+    Effect,
+    EffectLedger,
+    EffectResult,
     Event,
     EventLog,
     Failure,
@@ -27,11 +34,13 @@ from lamplighter.ports import (
     NewEvent,
     Outbound,
     Outbox,
+    Outcome,
+    Plan,
     SessionInfo,
     SessionState,
+    ToolEntry,
     ToolProvider,
     ToolResult,
-    ToolSpec,
 )
 
 type When = Literal["before", "after"]
@@ -42,12 +51,24 @@ async def no_hook(number: int, when: When, name: str) -> None:
     del number, when, name
 
 
+# The stores, whose every call may answer with a failure.
+STORES = ("log.", "inbox.", "outbox.", "ledger.", "blobs.")
+STORE_FAILURE = Failure(
+    kind="unavailable", effect="none", message="The drive is gone.", source="t"
+)
+
+
 @dataclass
 class Counter:
-    """Numbers every call and runs the hook around it."""
+    """Numbers every call and runs the hook around it.
+
+    With `fail_at`, the store call of that number answers with a failure
+    and does nothing, as a store that is gone for a moment would.
+    """
 
     hook: Hook = no_hook
     names: list[str] = field(default_factory=list[str])
+    fail_at: int | None = None
 
     @property
     def calls(self) -> int:
@@ -57,6 +78,9 @@ class Counter:
         self.names.append(name)
         number = len(self.names)
         await self.hook(number, "before", name)
+        if number == self.fail_at and name.startswith(STORES):
+            # Every store call returns its value or a Failure.
+            return cast(T, STORE_FAILURE)
         result = await call()
         await self.hook(number, "after", name)
         return result
@@ -169,13 +193,30 @@ class CountedTools:
     def __init__(self, inner: ToolProvider, counter: Counter) -> None:
         self.inner, self.counter = inner, counter
 
-    def list_tools(self) -> tuple[ToolSpec, ...]:
+    def list_tools(self) -> tuple[ToolEntry, ...]:
         return self.inner.list_tools()
 
     async def call(self, name: str, arguments: JsonObject) -> ToolResult | Failure:
         return await self.counter.around(
             f"tools.call {name}", lambda: self.inner.call(name, arguments)
         )
+
+    async def plan(
+        self, name: str, arguments: JsonObject
+    ) -> Plan | ToolResult | Failure:
+        return await self.counter.around(
+            f"tools.plan {name}", lambda: self.inner.plan(name, arguments)
+        )
+
+    async def apply(
+        self, name: str, arguments: JsonObject, plan: Plan
+    ) -> ToolResult | Failure:
+        return await self.counter.around(
+            f"tools.apply {name}", lambda: self.inner.apply(name, arguments, plan)
+        )
+
+    async def check(self, probe: JsonObject) -> bool | None:
+        return await self.counter.around("tools.check", lambda: self.inner.check(probe))
 
 
 class CountedChannel:
@@ -192,3 +233,47 @@ class CountedChannel:
 
     async def send(self, out: Outbound) -> DeliveryReceipt | Failure:
         return await self.counter.around("channel.send", lambda: self.inner.send(out))
+
+
+class CountedLedger:
+    def __init__(self, inner: EffectLedger, counter: Counter) -> None:
+        self.inner, self.counter = inner, counter
+
+    async def begin(
+        self, action: Action, probe: JsonObject | None, undo: JsonObject | None
+    ) -> Begun | Failure:
+        return await self.counter.around(
+            "ledger.begin", lambda: self.inner.begin(action, probe, undo)
+        )
+
+    async def finish(self, effect_id: int, result: EffectResult) -> None | Failure:
+        return await self.counter.around(
+            f"ledger.finish {result.outcome}",
+            lambda: self.inner.finish(effect_id, result),
+        )
+
+    async def resolve(self, effect_id: int, outcome: Outcome) -> None | Failure:
+        return await self.counter.around(
+            "ledger.resolve", lambda: self.inner.resolve(effect_id, outcome)
+        )
+
+    async def unresolved(self) -> tuple[Effect, ...] | Failure:
+        return await self.counter.around("ledger.unresolved", self.inner.unresolved)
+
+
+class CountedBlobs:
+    def __init__(self, inner: BlobStore, counter: Counter) -> None:
+        self.inner, self.counter = inner, counter
+
+    async def put(self, data: bytes, media_type: str) -> BlobHandle | Failure:
+        return await self.counter.around(
+            "blobs.put", lambda: self.inner.put(data, media_type)
+        )
+
+    async def get(self, handle: BlobHandle) -> bytes | Failure:
+        return await self.counter.around("blobs.get", lambda: self.inner.get(handle))
+
+    async def exists(self, handle: BlobHandle) -> bool | Failure:
+        return await self.counter.around(
+            "blobs.exists", lambda: self.inner.exists(handle)
+        )

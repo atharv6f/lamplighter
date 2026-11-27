@@ -77,7 +77,11 @@ async def start_run(
         NewEvent(
             type=RUN_STARTED,
             v=READ_VERSION[RUN_STARTED],
-            payload={"config_id": spec.config_id, "trigger": "message"},
+            payload={
+                "config_id": spec.config_id,
+                "trigger": "message",
+                "wall": spec.wall,
+            },
             at=at,
             run_id=run_id,
             cause=_event_id(first),

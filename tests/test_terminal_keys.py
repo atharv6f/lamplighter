@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 from lamplighter.app.chat import LEAVING, LOCK_HELD
+from tests.group_kill import kill_group
 from tests.pty_terminal import CTRL_C, CTRL_D, SECONDS, Terminal, piped
 
 
@@ -143,9 +144,7 @@ def test_ctrl_c_during_a_run_on_piped_input_stops_it_and_leaves_with_0(
         assert child.returncode == 0, errors
         assert b"[Stopped.]" in rest
     finally:
-        if child.poll() is None:
-            os.killpg(child.pid, signal.SIGKILL)
-        child.wait()
+        kill_group(child)
 
 
 def test_a_piped_last_line_with_no_line_break_is_answered(tmp_path: Path) -> None:

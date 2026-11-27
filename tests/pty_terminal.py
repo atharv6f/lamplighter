@@ -7,11 +7,12 @@ signal, as in a real terminal.
 
 import os
 import select
-import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+from tests.group_kill import kill_group
 
 ROOT = Path(__file__).parents[1]
 CTRL_C = b"\x03"
@@ -91,9 +92,7 @@ class Terminal:
         return self.child.wait(SECONDS)
 
     def close(self) -> None:
-        if self.child.poll() is None:
-            os.killpg(self.child.pid, signal.SIGKILL)
-            self.child.wait()
+        kill_group(self.child)
         os.close(self._screen)
 
     def session(self) -> str:

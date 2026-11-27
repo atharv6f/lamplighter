@@ -1,5 +1,6 @@
 """Works out what the open run of a session has done, from its saved events alone."""
 
+import dataclasses
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
@@ -20,6 +21,7 @@ from lamplighter.ports import (
     RUN_STARTED,
     Event,
     Failure,
+    JsonObject,
     ToolCallPart,
     Usage,
     from_stored,
@@ -50,20 +52,40 @@ class CallRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class SavedIntent:
+    """One saved `tool_intent`: its event id and its payload.
+
+    `action_class` is None for an intent written before calls had a class.
+    """
+
+    event_id: str
+    action_class: str | None
+    payload: JsonObject
+
+
+@dataclass(frozen=True, slots=True)
 class OpenCall:
     """A call of the newest whole reply that has no result yet.
 
-    `index` is its place among the run's calls. `intent_id` is the event id
-    of its `tool_intent` when one is saved: the call was started. `cut` says
-    it is the last part of a reply that stopped at the output limit, so its
-    arguments may be cut too.
+    `index` is its place among the run's calls, and `place` its place among
+    the calls of its reply, whose event is at `reply_seq`. `intents` are the
+    intents saved for it, oldest first: a call with one was started. `cut`
+    says it is the last part of a reply that stopped at the output limit, so
+    its arguments may be cut too.
     """
 
     call: ToolCallPart
     index: int
     reply_id: str
-    intent_id: str | None
+    reply_seq: int
+    place: int
+    intents: tuple[SavedIntent, ...]
     cut: bool
+
+    @property
+    def intent_id(self) -> str | None:
+        """Give the event id of the newest intent, or None when it has none."""
+        return self.intents[-1].event_id if self.intents else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +142,7 @@ class _Tally:
     used_micro_dollars: int = 0
     last_reply: LastReply | None = None
     whole_id: str = ""
+    whole_seq: int = 0
     whole: Reply | None = None
     bad_streak: int = 0
     first_call: int = 0
@@ -177,7 +200,7 @@ def _run_view(base: RunView, run: Sequence[Event]) -> RunView:
         config_id=config_id if isinstance(config_id, str) else None,
     )
     calls: list[CallRecord] = []
-    intents: dict[str, str] = {}
+    intents: dict[int, list[SavedIntent]] = {}
     for event in run[1:]:
         _count(tally, calls, intents, event)
     return RunView(
@@ -199,7 +222,10 @@ def _run_view(base: RunView, run: Sequence[Event]) -> RunView:
 
 
 def _count(
-    tally: _Tally, calls: list[CallRecord], intents: dict[str, str], event: Event
+    tally: _Tally,
+    calls: list[CallRecord],
+    intents: dict[int, list[SavedIntent]],
+    event: Event,
 ) -> None:
     if event.type == MODEL_REQUEST:
         tally.step += 1
@@ -207,10 +233,16 @@ def _count(
     elif event.type == MODEL_RESPONSE:
         _count_reply(tally, calls, intents, event)
     elif event.type == TOOL_INTENT:
-        intents[_text(event, "call_id")] = event.event_id
+        place = _unanswered(tally, calls, _text(event, "call_id"))
+        if place is not None:
+            intents.setdefault(place, []).append(_saved_intent(event))
     elif event.type == TOOL_RESULT:
         tally.used_ms += event.duration_ms or 0
-        _note_result(tally, calls, _text(event, "call_id"), _text(event, "text"))
+        place = _unanswered(tally, calls, _text(event, "call_id"))
+        if place is not None:
+            calls[place] = dataclasses.replace(
+                calls[place], result=without_repeat_warning(_text(event, "text"))
+            )
     elif event.type == REPLY_READY:
         tally.ending = Ending(
             seq=event.seq,
@@ -222,7 +254,10 @@ def _count(
 
 
 def _count_reply(
-    tally: _Tally, calls: list[CallRecord], intents: dict[str, str], event: Event
+    tally: _Tally,
+    calls: list[CallRecord],
+    intents: dict[int, list[SavedIntent]],
+    event: Event,
 ) -> None:
     reply = from_stored(Reply, event.payload)
     tally.used_ms += event.duration_ms or 0
@@ -234,7 +269,7 @@ def _count_reply(
         tally.bad_streak += 1
         return
     tally.bad_streak = 0
-    tally.whole, tally.whole_id = reply, event.event_id
+    tally.whole, tally.whole_id, tally.whole_seq = reply, event.event_id, event.seq
     tally.first_call = len(calls)
     # Call ids are only unique inside one reply, so the intents of an
     # earlier reply are forgotten.
@@ -245,24 +280,28 @@ def _count_reply(
     )
 
 
-def _note_result(
-    tally: _Tally, calls: list[CallRecord], call_id: str, text: str
-) -> None:
+def _unanswered(tally: _Tally, calls: list[CallRecord], call_id: str) -> int | None:
+    # An intent or a result belongs to the first call of the newest whole
+    # reply that has its id and no result yet, so two calls that share an
+    # id are kept apart.
     if tally.whole is None:
-        return
+        return None
     for offset, call in enumerate(tool_calls(tally.whole)):
         place = tally.first_call + offset
         if call.id == call_id and calls[place].result is None:
-            calls[place] = CallRecord(
-                key=calls[place].key,
-                reply_seq=calls[place].reply_seq,
-                result=without_repeat_warning(text),
-            )
-            return
+            return place
+    return None
+
+
+def _saved_intent(event: Event) -> SavedIntent:
+    action_class = event.payload.get("action_class")
+    if action_class is not None and not isinstance(action_class, str):
+        raise ValueError("tool_intent has an action_class that is not a text")
+    return SavedIntent(event.event_id, action_class, event.payload)
 
 
 def _open_calls(
-    tally: _Tally, calls: list[CallRecord], intents: dict[str, str]
+    tally: _Tally, calls: list[CallRecord], intents: dict[int, list[SavedIntent]]
 ) -> tuple[OpenCall, ...]:
     if tally.whole is None:
         return ()
@@ -281,7 +320,9 @@ def _open_calls(
                 call=call,
                 index=place,
                 reply_id=tally.whole_id,
-                intent_id=intents.get(call.id),
+                reply_seq=tally.whole_seq,
+                place=offset,
+                intents=tuple(intents.get(place, ())),
                 cut=cut_reply and parts[-1] == call,
             )
         )

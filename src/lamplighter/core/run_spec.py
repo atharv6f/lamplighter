@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 
 from lamplighter.core.cost import Prices
+from lamplighter.ports import JsonObject
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,7 +35,8 @@ class RunSpec:
     limits: model calls, seconds of model and tool calls, tokens, and
     millionths of a dollar. `model_deadline_ms` bounds one model call with
     its retries, and `cancel_bound_ms` is how long a call that is being cut
-    short gets to stop.
+    short gets to stop. `wall` is the executor's record of its wall, saved
+    on `run_started` too, because the hash cannot be read back.
     """
 
     config_id: str
@@ -48,3 +50,4 @@ class RunSpec:
     model_retries: int
     cancel_bound_ms: int
     prices: Prices
+    wall: JsonObject

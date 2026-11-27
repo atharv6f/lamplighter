@@ -5,9 +5,10 @@ Checks that finish something a kill may have cut in half come before every
 check that ends a run, and a stop comes before every check that spends.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+from lamplighter.core.arguments_check import problems
 from lamplighter.core.harness_texts import (
     CONFIG_CHANGED_NOTICE,
     CUT_REPLY_LINE,
@@ -42,7 +43,14 @@ from lamplighter.core.run_view import (
     RunReason,
     RunView,
 )
-from lamplighter.ports import ErrorEvent, Failure, Inbound, InboxEntry, inbound_event_id
+from lamplighter.ports import (
+    ErrorEvent,
+    Failure,
+    Inbound,
+    InboxEntry,
+    ToolEntry,
+    inbound_event_id,
+)
 
 STOP_COMMAND = "stop"
 
@@ -103,8 +111,15 @@ class EndRun:
 
 
 @dataclass(frozen=True, slots=True)
+class SettleEffect:
+    """Answer a change whose intent is saved from its ledger row, without a run."""
+
+    call: OpenCall
+
+
+@dataclass(frozen=True, slots=True)
 class RunCall:
-    """Run one tool call."""
+    """Run one tool call: for the first time, or a read once more after a kill."""
 
     call: OpenCall
 
@@ -129,6 +144,7 @@ type Move = (
     | CloseRun
     | AnswerCall
     | EndRun
+    | SettleEffect
     | RunCall
     | TakeMessages
     | CallModel
@@ -144,9 +160,11 @@ def next_move(
     view: RunView,
     rows: Sequence[InboxEntry],
     spec: RunSpec,
-    tool_names: frozenset[str],
+    entries: Mapping[str, ToolEntry],
 ) -> Move:
     """Pick the next move. `rows` are the session's pending inbox rows, oldest first.
+
+    `entries` are the tools listed now, by name.
 
     Raises ValueError for a row that is neither a message nor a stop,
     because the intake lets nothing else in, so such a row is a bug.
@@ -164,7 +182,7 @@ def next_move(
     if view.ending is not None:
         stops = tuple(row for row in rows if is_stop(row.inbound))
         return CloseRun(view.ending, stops)
-    return _in_open_run(view, rows, spec, tool_names)
+    return _in_open_run(view, rows, spec, entries)
 
 
 def _already_saved(
@@ -198,21 +216,25 @@ def _with_no_run(view: RunView, rows: Sequence[InboxEntry]) -> Move:
 
 
 def _in_open_run(
-    view: RunView, rows: Sequence[InboxEntry], spec: RunSpec, tool_names: frozenset[str]
+    view: RunView,
+    rows: Sequence[InboxEntry],
+    spec: RunSpec,
+    entries: Mapping[str, ToolEntry],
 ) -> Move:
     first = view.open_calls[0] if view.open_calls else None
-    if first is not None and first.intent_id is not None:
-        return AnswerCall(first, "interrupted")
+    stop_pending = any(is_stop(row.inbound) for row in rows)
+    if first is not None and first.intents:
+        return _for_started_call(view, first, spec, entries, stop_pending)
     if first is None:
         ending = _what_the_reply_leads_to(view, spec)
         if ending is not None:
             return ending
     if view.config_id != spec.config_id:
         return EndRun("failed", "config_changed", "notice", CONFIG_CHANGED_NOTICE)
-    if any(is_stop(row.inbound) for row in rows):
+    if stop_pending:
         return EndRun("cancelled", "", "notice", STOPPED_NOTICE)
     if first is not None:
-        return _for_open_call(view, first, spec, tool_names)
+        return _for_open_call(view, first, spec, entries)
     hit = first_limit_reached(view, spec)
     if hit is not None:
         return _limit_end(hit)
@@ -222,8 +244,46 @@ def _in_open_run(
     return CallModel()
 
 
+def _for_started_call(
+    view: RunView,
+    first: OpenCall,
+    spec: RunSpec,
+    entries: Mapping[str, ToolEntry],
+    stop_pending: bool,
+) -> Move:
+    # A change that had its intent saved is settled before anything can end
+    # the run: a stop, new settings or the time.
+    if first.intents[0].action_class not in (None, "read"):
+        return SettleEffect(first)
+    if _may_read_again(view, first, spec, entries, stop_pending):
+        return RunCall(first)
+    return AnswerCall(first, "interrupted")
+
+
+def _may_read_again(
+    view: RunView,
+    first: OpenCall,
+    spec: RunSpec,
+    entries: Mapping[str, ToolEntry],
+    stop_pending: bool,
+) -> bool:
+    # One intent only, so a read that kills the harness each time it runs
+    # is started twice and then answered. The saved class says what the
+    # tool was, and today's entry says what it is.
+    entry = entries.get(first.call.name)
+    return (
+        len(first.intents) == 1
+        and first.intents[0].action_class == "read"
+        and view.config_id == spec.config_id
+        and entry is not None
+        and entry.action_class == "read"
+        and not stop_pending
+        and not time_is_up(view, spec)
+    )
+
+
 def _for_open_call(
-    view: RunView, first: OpenCall, spec: RunSpec, tool_names: frozenset[str]
+    view: RunView, first: OpenCall, spec: RunSpec, entries: Mapping[str, ToolEntry]
 ) -> Move:
     if time_is_up(view, spec):
         return _limit_end(seconds_hit(view, spec))
@@ -234,8 +294,11 @@ def _for_open_call(
         return AnswerCall(first, "cut_off")
     if first.call.arguments is None:
         return AnswerCall(first, "arguments_unparsed")
-    if first.call.name not in tool_names:
+    entry = entries.get(first.call.name)
+    if entry is None:
         return AnswerCall(first, "unknown_tool")
+    if problems(entry.spec.arguments_schema, first.call.arguments):
+        return AnswerCall(first, "arguments_invalid")
     return RunCall(first)
 
 

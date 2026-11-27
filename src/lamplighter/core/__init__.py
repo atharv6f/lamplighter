@@ -1,6 +1,7 @@
 """The agent's own logic. Imports ports, never adapters."""
 
 from lamplighter.core import harness_texts
+from lamplighter.core.arguments_check import unsupported
 from lamplighter.core.chat_session import Wake, drive
 from lamplighter.core.config_id import config_id
 from lamplighter.core.cost import Prices, cost_micro_dollars
@@ -67,4 +68,5 @@ __all__ = [
     "config_id",
     "take",
     "unfinished_work",
+    "unsupported",
 ]

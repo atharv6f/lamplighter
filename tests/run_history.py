@@ -18,15 +18,19 @@ from lamplighter.ports import (
     StopReason,
     TextPart,
     ToolCallPart,
+    ToolEntry,
     Usage,
     event_id_for,
     inbound_event_id,
     to_plain,
 )
+from tests.fake_clock import FakeClock
+from tests.stub_tools import StubTools
 
 AT = "2026-11-26T07:35:12.345Z"
 SESSION = "sess-a"
 CONFIG = "c" * 64
+WALL = {"adapter": "fake"}
 PRICES = Prices(
     input_uncached=4_000_000,
     cache_read=200_000,
@@ -45,8 +49,11 @@ SPEC = RunSpec(
     model_retries=2,
     cancel_bound_ms=800,
     prices=PRICES,
+    wall=WALL,
 )
-TOOLS = frozenset({"current_time", "wait"})
+TOOLS: dict[str, ToolEntry] = {
+    entry.spec.name: entry for entry in StubTools(FakeClock()).list_tools()
+}
 
 
 def call(call_id: str = "call_a", name: str = "wait", **arguments: Any) -> ToolCallPart:
@@ -180,8 +187,12 @@ class History:
         self.request()
         return self.reply(*parts, reason=reason)
 
-    def intent(self, made: ToolCallPart) -> Event:
-        return self.add("tool_intent", {"call_id": made.id, "name": made.name})
+    def intent(self, made: ToolCallPart, action_class: str | None = None) -> Event:
+        """Save an intent. With no class it is one that older code wrote."""
+        payload: dict[str, Any] = {"call_id": made.id, "name": made.name}
+        if action_class is not None:
+            payload["action_class"] = action_class
+        return self.add("tool_intent", payload)
 
     def result(
         self,

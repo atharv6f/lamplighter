@@ -4,46 +4,82 @@ The default test run leaves these out. Run them by hand:
 
     uv run --env-file .env pytest -m live -s tests/live/test_loop.py
 
-Each runs the real loop on a real SQLite store with the stub tools, and
-prints what each model call cost and what the model said. Every prompt
+Each runs the real loop on a real SQLite store with the built-in tools on
+a work folder of its own, and prints what each model call cost and what
+the model said. Commands run behind the real wall, so these need macOS.
+The page web_fetch reads is served by the test itself, behind a made-up
+public address, so no request leaves this machine. Every prompt and page
 here is made up.
 """
 
 import asyncio
 import os
+import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
-from lamplighter.adapters import ScriptedChannel, StubTools, SystemClock, SystemIds
+from lamplighter.adapters import (
+    FileBlobStore,
+    ScriptedChannel,
+    SystemClock,
+    SystemIds,
+)
+from lamplighter.adapters.builtin_tools import BuiltinTools, WebAccess
+from lamplighter.adapters.seatbelt import SeatbeltExecutor
 from lamplighter.adapters.sqlite import (
+    SqliteEffectLedger,
     SqliteEventLog,
     SqliteInbox,
     SqliteOutbox,
     open_database,
 )
-from lamplighter.app.chat import run_spec
+from lamplighter.app.chat import Tooling, run_spec
 from lamplighter.app.config import Config, load_config
 from lamplighter.app.main import build_model
+from lamplighter.app.tool_folders import make_tool_folders
 from lamplighter.core import Deps, Observers, RunningSessions, Wake, drive, take
 from lamplighter.ports import (
+    BlobStore,
     Event,
+    Executor,
     Failure,
     Inbound,
     JsonObject,
     ModelClient,
+    Plan,
     Sender,
+    ToolEntry,
     ToolProvider,
     ToolResult,
-    ToolSpec,
     utc_text,
 )
+from tests.builtin_kit import NO_WEB, PAGE_URL, served_page
+from tests.stub_tools import StubTools
+from tests.tooling_kit import with_tool_folders
 
 pytestmark = pytest.mark.live
 
 SETTINGS = Path(__file__).parents[2] / "lamplighter.toml"
 SESSION = "live-loop"
+FILE_ASK = (
+    "Write the file kettle.txt with the one line: The kettle is blue."
+    " Then read it back with read_file. Then change the word blue to green"
+    " with edit_file."
+)
+COMMAND_ASK = (
+    "Run the command: echo made-up-$((6*7)) with the shell tool, and tell me"
+    " exactly what it printed."
+)
+PAGE_ASK = f"Fetch {PAGE_URL} with web_fetch and tell me the secret word on that page."
+NOTE_ASK = "Write the file note.txt with the one line: Water the plants."
+TIME_ASK = "What is the time now in UTC? Use the tool."
+MORE_ASK = "And say it in words, please."
+
+type Walled = Callable[[Config], Executor]
+type Wrap = Callable[[ToolProvider], ToolProvider]
 
 
 class Killed(BaseException):
@@ -58,6 +94,18 @@ def config() -> Config:
 @pytest.fixture
 def client(config: Config) -> ModelClient:
     return build_model(config, os.environ["ANTHROPIC_API_KEY"])
+
+
+def behind_the_wall(config: Config) -> Executor:
+    tools = config.tools
+    return SeatbeltExecutor(
+        tools.work_dir, tools.scratch_dir, config.store.dir, SystemClock()
+    )
+
+
+@pytest.fixture
+def walled() -> Walled:
+    return behind_the_wall
 
 
 def typed(native_id: str, text: str) -> Inbound:
@@ -82,21 +130,38 @@ class Chat:
     shown: list[str]
 
 
-class DiesInFirstCall:
-    """The stub tools, except that the first call dies part way, as a kill would."""
+class DiesInFirstApply:
+    """The built-in tools, except that the first change dies before it starts.
+
+    The intent and the ledger row are saved by then, as a kill would leave
+    them, so the next process must settle the row with the tool's check.
+    """
 
     def __init__(self, inner: ToolProvider) -> None:
         self._inner = inner
         self.died = False
 
-    def list_tools(self) -> tuple[ToolSpec, ...]:
+    def list_tools(self) -> tuple[ToolEntry, ...]:
         return self._inner.list_tools()
 
     async def call(self, name: str, arguments: JsonObject) -> ToolResult | Failure:
+        return await self._inner.call(name, arguments)
+
+    async def plan(
+        self, name: str, arguments: JsonObject
+    ) -> Plan | ToolResult | Failure:
+        return await self._inner.plan(name, arguments)
+
+    async def apply(
+        self, name: str, arguments: JsonObject, plan: Plan
+    ) -> ToolResult | Failure:
         if not self.died:
             self.died = True
             raise Killed
-        return await self._inner.call(name, arguments)
+        return await self._inner.apply(name, arguments, plan)
+
+    async def check(self, probe: JsonObject) -> bool | None:
+        return await self._inner.check(probe)
 
 
 class SaysMoreDuringFirstCall:
@@ -108,7 +173,7 @@ class SaysMoreDuringFirstCall:
         self._more = more
         self.said = False
 
-    def list_tools(self) -> tuple[ToolSpec, ...]:
+    def list_tools(self) -> tuple[ToolEntry, ...]:
         return self._inner.list_tools()
 
     async def call(self, name: str, arguments: JsonObject) -> ToolResult | Failure:
@@ -119,25 +184,51 @@ class SaysMoreDuringFirstCall:
             await take(self._more, self._inbox, channel, running, lambda: None)
         return await self._inner.call(name, arguments)
 
+    async def plan(
+        self, name: str, arguments: JsonObject
+    ) -> Plan | ToolResult | Failure:
+        return await self._inner.plan(name, arguments)
+
+    async def apply(
+        self, name: str, arguments: JsonObject, plan: Plan
+    ) -> ToolResult | Failure:
+        return await self._inner.apply(name, arguments, plan)
+
+    async def check(self, probe: JsonObject) -> bool | None:
+        return await self._inner.check(probe)
+
 
 def chat(
     folder: Path,
     config: Config,
     client: ModelClient,
     first: Inbound,
-    tools: ToolProvider | None = None,
+    walled: Walled,
+    wrap: Wrap = lambda tools: tools,
+    web: WebAccess = NO_WEB,
 ) -> Chat:
     """Save `first`, then drive the session until there is nothing left to do.
 
-    A tool that dies ends this process. A new one is started on the same
-    store with the plain stub tools, as a restart would.
+    The store is in `folder`, with the work and scratch folders beside it.
+    The tools are the built-in ones behind the wall `walled` makes, given
+    through `wrap`. A tool that dies ends this process, and a new one is
+    started on the same store, as a restart would.
     """
-    connection = open_database(folder / "state.db", 5.0)
+    config = with_tool_folders(config, folder / "store")
+    store = Path(config.store.dir)
+    store.mkdir()
+    assert make_tool_folders(config.tools) is None
+    connection = open_database(store / "state.db", 5.0)
     assert not isinstance(connection, Failure), connection
     clock = SystemClock()
     limit = config.store.max_record_bytes
     channel = ScriptedChannel([], clock)
-    stub = StubTools(clock)
+    blobs: BlobStore = FileBlobStore(
+        store / "blobs", clock, config.store.max_blob_bytes
+    )
+    executor = walled(config)
+    built = BuiltinTools(config.tools, blobs, executor, clock, web)
+    tools = wrap(built)
 
     async def one_process(given: ToolProvider) -> None:
         deps = Deps(
@@ -146,6 +237,8 @@ def chat(
             outbox=SqliteOutbox(connection, clock, limit),
             model=client,
             tools=given,
+            ledger=SqliteEffectLedger(connection, clock, limit),
+            blobs=blobs,
             clock=clock,
             ids=SystemIds(),
             observers=Observers(),
@@ -153,16 +246,21 @@ def chat(
         )
         wake = Wake()
         wake.end_input()
-        spec = run_spec(config, stub)
+        spec = run_spec(config, Tooling(given, executor))
         assert await drive(SESSION, spec, deps, channel, wake, lambda: None) is None
 
     async def run_all() -> tuple[Event, ...]:
         saved = await SqliteInbox(connection, limit).accept(first)
         assert not isinstance(saved, Failure), saved
-        try:
-            await one_process(tools or stub)
-        except Killed:
-            await one_process(stub)
+        # Each kill ends a process, and a new one carries on from the stores.
+        for _ in range(3):
+            try:
+                await one_process(tools)
+                break
+            except Killed:
+                pass
+        else:
+            raise AssertionError("the chat was killed three times")
         events = await SqliteEventLog(connection, {}, limit).read(SESSION, 0)
         assert not isinstance(events, Failure), events
         return events
@@ -213,43 +311,82 @@ def ended_done_with_a_reply(chat_: Chat) -> None:
         assert isinstance(end, dict) and end.get("kind") == "stop", end
 
 
-def test_a_whole_run_calls_the_clock_tool_and_answers(
-    tmp_path: Path, config: Config, client: ModelClient
+def intents(chat_: Chat) -> list[str]:
+    return [str(e.payload["name"]) for e in of_type(chat_, "tool_intent")]
+
+
+def test_the_model_writes_reads_and_edits_a_file(
+    tmp_path: Path, config: Config, client: ModelClient, walled: Walled
 ) -> None:
-    asked = typed("t1", "What is the time now in UTC? Use the tool.")
-    done = chat(tmp_path, config, client, asked)
+    asked = typed("t1", FILE_ASK)
+    done = chat(tmp_path, config, client, asked, walled)
     ended_done_with_a_reply(done)
-    intents = [e.payload["name"] for e in of_type(done, "tool_intent")]
-    assert "current_time" in intents
+    assert {"write_file", "read_file", "edit_file"} <= set(intents(done))
     results = of_type(done, "tool_result")
-    assert results and not any(r.payload.get("harness") for r in results)
+    assert not any(r.payload.get("harness") for r in results)
+    work = Path(with_tool_folders(config, tmp_path / "store").tools.work_dir)
+    assert (work / "kettle.txt").read_text().strip() == "The kettle is green."
 
 
-def test_a_call_cut_off_by_a_kill_is_answered_interrupted_and_the_api_accepts_it(
-    tmp_path: Path, config: Config, client: ModelClient
+def test_the_model_runs_a_command_behind_the_wall_and_says_what_it_printed(
+    tmp_path: Path, config: Config, client: ModelClient, walled: Walled
 ) -> None:
-    asked = typed("t1", "What is the time now in UTC? Use the tool.")
-    done = chat(
-        tmp_path, config, client, asked, DiesInFirstCall(StubTools(SystemClock()))
-    )
+    asked = typed("t1", COMMAND_ASK)
+    done = chat(tmp_path, config, client, asked, walled)
     ended_done_with_a_reply(done)
-    harness = [r.payload.get("harness") for r in of_type(done, "tool_result")]
-    assert harness and harness[0] == "interrupted", harness
-    # The request after the repair was made and answered.
-    assert len(of_type(done, "model_response")) >= 2
+    assert "shell" in intents(done)
+    results = [str(r.payload["text"]) for r in of_type(done, "tool_result")]
+    assert any("made-up-42" in text for text in results), results
+    assert "made-up-42" in done.shown[0]
+
+
+def test_the_model_answers_from_a_fetched_page_given_as_outside_text(
+    tmp_path: Path, config: Config, client: ModelClient, walled: Walled
+) -> None:
+    asked = typed("t1", PAGE_ASK)
+    done = chat(tmp_path, config, client, asked, walled, web=served_page())
+    ended_done_with_a_reply(done)
+    assert "web_fetch" in intents(done)
+    fetched = [r for r in of_type(done, "tool_result") if r.payload.get("tainted")]
+    assert fetched and "outside_text" in str(fetched[0].payload["text"])
+    assert "periwinkle" in done.shown[0].lower()
+
+
+def test_a_write_cut_off_after_its_intent_is_settled_and_written_again(
+    tmp_path: Path, config: Config, client: ModelClient, walled: Walled
+) -> None:
+    asked = typed("t1", NOTE_ASK)
+    done = chat(tmp_path, config, client, asked, walled, wrap=DiesInFirstApply)
+    ended_done_with_a_reply(done)
+    results = of_type(done, "tool_result")
+    assert results[0].payload.get("harness") == "interrupted", results[0].payload
+    assert "did not take effect" in str(results[0].payload["text"])
+    assert intents(done).count("write_file") >= 2
+    work = Path(with_tool_folders(config, tmp_path / "store").tools.work_dir)
+    assert (work / "note.txt").read_text().strip() == "Water the plants."
 
 
 def test_a_message_that_joins_a_run_is_accepted_beside_a_tool_result(
-    tmp_path: Path, config: Config, client: ModelClient
+    tmp_path: Path, config: Config, client: ModelClient, walled: Walled
 ) -> None:
-    asked = typed("t1", "What is the time now in UTC? Use the tool.")
-    more = typed("t2", "And say it in words, please.")
-    connection = open_database(tmp_path / "state.db", 5.0)
-    assert not isinstance(connection, Failure)
-    inbox = SqliteInbox(connection, config.store.max_record_bytes)
-    tools = SaysMoreDuringFirstCall(StubTools(SystemClock()), inbox, more)
-    done = chat(tmp_path, config, client, asked, tools)
-    connection.close()
+    asked = typed("t1", TIME_ASK)
+    more = typed("t2", MORE_ASK)
+    opened: list[sqlite3.Connection] = []
+
+    def stubs_saying_more(built: ToolProvider) -> ToolProvider:
+        # The clock tool of the stubs, on the inbox of the chat's own store.
+        store = with_tool_folders(config, tmp_path / "store").store.dir
+        connection = open_database(Path(store) / "state.db", 5.0)
+        assert not isinstance(connection, Failure)
+        opened.append(connection)
+        inbox = SqliteInbox(connection, config.store.max_record_bytes)
+        return SaysMoreDuringFirstCall(StubTools(SystemClock()), inbox, more)
+
+    try:
+        done = chat(tmp_path, config, client, asked, walled, wrap=stubs_saying_more)
+    finally:
+        for connection in opened:
+            connection.close()
     ended_done_with_a_reply(done)
     said = [e.payload["text"] for e in of_type(done, "user_message")]
     assert said == [asked.text, more.text]

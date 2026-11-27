@@ -21,6 +21,7 @@ dev = [
     "pyright>=1.1.414",
     "pytest>=9.2.0",
     "ruff>=0.17.6",
+    "trustme>=1.2.1",
 ]
 
 [tool.ruff.lint]
@@ -41,13 +42,15 @@ typeCheckingMode = "strict"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# Tests marked "live" call the real API and cost money, and tests marked
-# "crash" kill a process 200 times and take minutes, so the default run
-# leaves both out. "-m live" or "-m crash" on the command line runs them.
-addopts = "-m 'not live and not crash'"
+# Tests marked "live" call the real API and cost money, tests marked "crash"
+# kill a process 200 times and take minutes, and tests marked "sandbox" need
+# macOS's sandbox-exec, so the default run leaves all three out. "-m live",
+# "-m crash" or "-m sandbox" on the command line runs them.
+addopts = "-m 'not live and not crash and not sandbox'"
 markers = [
     "live: calls the real Anthropic API and needs ANTHROPIC_API_KEY",
     "crash: kills a process that writes to a real store, 200 times",
+    "sandbox: runs commands behind the real wall and needs macOS's sandbox-exec",
 ]
 
 [tool.importlinter]
