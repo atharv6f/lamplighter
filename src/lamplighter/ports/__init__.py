@@ -39,6 +39,13 @@ from lamplighter.ports.event_log import (
     Upcaster,
     Upcasters,
 )
+from lamplighter.ports.executor import (
+    Command,
+    ExecResult,
+    Executor,
+    Profile,
+    refused_command,
+)
 from lamplighter.ports.failure import Failure, FailureEffect, FailureKind
 from lamplighter.ports.id_source import IdSource
 from lamplighter.ports.inbound import Inbound, Sender
@@ -126,6 +133,10 @@ __all__ = [
     "Effect",
     "EffectLedger",
     "EffectResult",
+    "Command",
+    "ExecResult",
+    "Executor",
+    "Profile",
     "EffectState",
     "ErrorEvent",
     "Event",
@@ -188,6 +199,7 @@ __all__ = [
     "is_hash",
     "is_id",
     "read_saved_json",
+    "refused_command",
     "saved_json",
     "saved_size",
     "to_plain",

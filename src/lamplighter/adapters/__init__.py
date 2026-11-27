@@ -1,6 +1,7 @@
 """Code that talks to the outside world. Each adapter implements one port."""
 
 from lamplighter.adapters.counting_ids import CountingIds
+from lamplighter.adapters.fake_executor import FakeExecutor
 from lamplighter.adapters.file_blob_store import BlobTotals, FileBlobStore
 from lamplighter.adapters.made_up_world import MadeUpWorld, WorldTools
 from lamplighter.adapters.recorded_model import RecordingModel, ReplayedModel
@@ -22,6 +23,7 @@ from lamplighter.adapters.terminal import TerminalChannel
 
 __all__ = [
     "CountingIds",
+    "FakeExecutor",
     "MadeUpWorld",
     "WorldTools",
     "ScriptedChannel",
