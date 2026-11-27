@@ -255,6 +255,22 @@ def test_a_tool_setting_at_the_edge_of_its_range_is_accepted(
     load_config(write(tmp_path, GOOD.replace(good, edge)))
 
 
+@pytest.mark.parametrize("work", ["~", "~/", "/"])
+def test_the_home_folder_itself_or_the_root_is_refused_as_a_tool_folder(
+    tmp_path: Path, work: str
+) -> None:
+    # The other folders are put outside the home folder, so only this rule
+    # can refuse the home folder.
+    text = (
+        GOOD.replace('work_dir = "~/made-up-work"', f'work_dir = "{work}"')
+        .replace('scratch_dir = "~/made-up-scratch"', 'scratch_dir = "/made-up/s"')
+        .replace('dir = "~/.lamplighter"', 'dir = "/made-up/store"')
+    )
+    expected = "/" if work == "/" else str(Path.home())
+    with pytest.raises(ValueError, match=f"^tools.work_dir must not be {expected}$"):
+        load_config(write(tmp_path, text))
+
+
 def test_a_folder_named_through_a_link_is_kept_as_named(tmp_path: Path) -> None:
     # The chat's start refuses it, with the resolved path in its message.
     (tmp_path / "real").mkdir()

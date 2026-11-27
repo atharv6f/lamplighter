@@ -11,6 +11,7 @@ import io
 import os
 import signal
 import stat
+import sys
 import threading
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
@@ -493,3 +494,31 @@ def test_main_builds_the_seven_built_in_tools_behind_the_wall(tmp_path: Path) ->
         "write_file",
     ]
     assert built.executor.wall()["adapter"] == "seatbelt"
+
+
+def test_the_chat_starts_on_the_real_tools_before_their_folders_exist(
+    tmp_path: Path,
+) -> None:
+    # The built-in tools open the work folder when they are made, so the
+    # folders must be made first. Off macOS the wall is down, and says so.
+    config = config_in(tmp_path)
+    screen, errors, keyboard = Screen(), io.StringIO(), typed(b"Hello.\n")
+    parts = chat_parts(
+        config,
+        ModelByRequest(answers),
+        builtin_tooling(config, SystemClock()),
+        keyboard.reader,
+        screen,
+        errors,
+    )
+    try:
+        code = chat(config, None, parts)
+    finally:
+        keyboard.close()
+        keyboard.done()
+    assert (code, errors.getvalue()) == (0, "")
+    assert "Answer 1." in screen.getvalue()
+    if sys.platform != "darwin":
+        assert "The sandbox is not available: The wall needs macOS" in (
+            screen.getvalue()
+        )
