@@ -118,6 +118,10 @@ async def _work(
             message=f"The command could not be started: {error.strerror}.",
             source=_SOURCE,
         )
+    except BaseException:
+        # Only a bug or the loop's shutdown lands here. The pipe still closes.
+        os.close(read_end)
+        raise
     finally:
         os.close(write_end)
     capture = _Capture(limit=capture_bytes, kept=bytearray())

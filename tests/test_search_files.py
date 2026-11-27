@@ -203,3 +203,13 @@ def test_matches_are_sorted_by_path_and_then_by_line_number(work: Path) -> None:
     assert run_on_fake(work, answer, pattern="x") == said(
         "3 matching lines in 2 files.\na:9: z\na:10: y\nb:2: x"
     )
+
+
+@pytest.mark.parametrize("where", ["pattern", "glob"])
+def test_a_zero_byte_in_the_search_is_refused_and_raises_nothing(
+    work: Path, where: str
+) -> None:
+    given: JsonObject = {"pattern": "made-up", where: "made\0up"}
+    result = asyncio.run(tools_on(work).call("search_files", given))
+    assert isinstance(result, Failure), result
+    assert (result.kind, result.effect) == ("invalid_input", "none")

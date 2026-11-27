@@ -68,7 +68,8 @@ class Executor(Protocol):
       wherever the cancel lands. A second cancel changes nothing.
     - A non-zero exit, a time out and a flood are results. A `Failure` means
       the command was not started: `unavailable`, or `invalid_input` for a
-      `cwd` outside the work folder, an empty `argv` or a limit below 1.
+      `cwd` outside the work folder, an empty `argv`, a limit below 1, or an
+      argument or variable that holds a zero byte or is not UTF-8.
     - `wall()` gives the same record of plain values for the life of the
       process, saying which wall this is.
     """
@@ -95,7 +96,25 @@ def refused_command(command: Command, work: Path, source: str) -> Failure | None
     cwd = Path(os.path.realpath(command.cwd))
     if not cwd.is_relative_to(work):
         return _invalid(f"The folder {command.cwd} is outside the work folder.", source)
+    texts = (*command.argv, *command.env.keys(), *command.env.values())
+    if not all(_passable(text) for text in texts):
+        return _invalid(
+            "A command's arguments and variables cannot hold a zero byte or"
+            " text that is not UTF-8.",
+            source,
+        )
     return None
+
+
+def _passable(text: str) -> bool:
+    # A program gets its arguments as C strings, which end at a zero byte.
+    if "\0" in text:
+        return False
+    try:
+        text.encode()
+    except UnicodeEncodeError:
+        return False
+    return True
 
 
 def _invalid(message: str, source: str) -> Failure:

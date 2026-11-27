@@ -198,3 +198,11 @@ def test_a_time_limit_above_the_setting_does_not_fit_the_schema(work: Path) -> N
             "shell needs a command, and a timeout_s from 1 to 600.", True, "none"
         )
     )
+
+
+def test_a_zero_byte_in_the_command_is_refused_and_raises_nothing(work: Path) -> None:
+    given: JsonObject = {"command": "echo made\0up > marker"}
+    result = asyncio.run(tools_on(work).apply("shell", given, Plan(".", None, None)))
+    assert isinstance(result, Failure), result
+    assert (result.kind, result.effect) == ("invalid_input", "none")
+    assert not (work / "marker").exists()

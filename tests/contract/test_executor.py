@@ -169,6 +169,28 @@ def test_a_folder_outside_the_work_folder_is_refused_and_nothing_starts(
     assert not marker.exists()
 
 
+@pytest.mark.parametrize(
+    "where", ["an argument", "a variable", "a name", "text that is not UTF-8"]
+)
+def test_a_zero_byte_or_text_that_is_not_utf8_is_refused_and_nothing_starts(
+    any_executor: Executor, work: Path, where: str
+) -> None:
+    marker = work / "marker"
+    made = command(work, "/usr/bin/touch", str(marker))
+    bad = {
+        "an argument": replace(made, argv=(*made.argv, "made\0up")),
+        "a variable": replace(made, env={"MADE_UP": "made\0up"}),
+        "a name": replace(made, env={"MADE\0UP": "made-up"}),
+        "text that is not UTF-8": replace(made, argv=(*made.argv, "made\udc80up")),
+    }[where]
+    before = open_descriptors()
+    refused = run(any_executor.run(bad))
+    assert isinstance(refused, Failure), refused
+    assert (refused.kind, refused.effect) == ("invalid_input", "none")
+    assert not marker.exists()
+    assert open_descriptors() == before
+
+
 def test_a_link_inside_the_work_folder_that_leads_out_is_refused(
     any_executor: Executor, work: Path, tmp_path: Path
 ) -> None:
