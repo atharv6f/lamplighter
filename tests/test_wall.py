@@ -179,11 +179,15 @@ def test_a_link_out_of_the_work_folder_reads_and_writes_nothing(place: Place) ->
 @pytest.mark.parametrize("folder", ["work", "scratch"])
 def test_a_root_folder_cannot_be_removed_or_moved(place: Place, folder: str) -> None:
     root: Path = getattr(place, folder)
+    # The wall's self-test writes in the scratch folder's tmp, so it runs
+    # before the folder is emptied, and the same wall runs the rest.
+    wall = place.wall()
+    place.run("/usr/bin/true", wall=wall)
     for name in list(root.iterdir()):
         shutil.rmtree(name)
-    place.run("/bin/rmdir", str(root))
-    place.run("/bin/mv", str(root), str(place.work / "moved"))
-    place.run("/bin/mv", str(root), str(place.scratch / "moved"))
+    place.run("/bin/rmdir", str(root), wall=wall)
+    place.run("/bin/mv", str(root), str(place.work / "moved"), wall=wall)
+    place.run("/bin/mv", str(root), str(place.scratch / "moved"), wall=wall)
     assert root.is_dir() and not root.is_symlink()
 
 
@@ -197,8 +201,10 @@ def test_a_signal_to_a_process_outside_fails(place: Place) -> None:
 def test_no_app_can_be_started_or_talked_to(place: Place) -> None:
     before = _running("Calculator")
     opened = place.run("/usr/bin/open", "-a", "Calculator")
+    # An application's name is answered from its bundle, with no event
+    # sent, so the script asks for something only the running Finder knows.
     told = place.run(
-        "/usr/bin/osascript", "-e", 'tell application "Finder" to get name'
+        "/usr/bin/osascript", "-e", 'tell application "Finder" to count windows'
     )
     started = _running("Calculator") - before
     for pid in started:

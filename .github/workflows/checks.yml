@@ -20,8 +20,15 @@ jobs:
   # The wall needs macOS's sandbox-exec, so its tests run on a Mac.
   wall:
     runs-on: macos-latest
+    # The Python that uv downloads for macOS links an SQLite older than the
+    # store's floor. Homebrew's links Homebrew's SQLite, as on the Mac the
+    # harness is made for.
+    env:
+      UV_PYTHON: /opt/homebrew/opt/python@3.13/bin/python3.13
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+      - run: brew install python@3.13 sqlite
+      - run: $UV_PYTHON -c "import sqlite3; print(sqlite3.sqlite_version)"
       - run: uv sync --locked
       - run: uv run pytest -q -m "sandbox and not crash"
