@@ -5,6 +5,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+from lamplighter.adapters.builtin_tools import ToolSettings
 from lamplighter.core import Prices, RunSettings
 from lamplighter.ports import ModelProfile, from_plain
 
@@ -13,6 +14,20 @@ from lamplighter.ports import ModelProfile, from_plain
 # option syncs. The last two hold iCloud Drive and other sync tools' folders.
 _SYNCED_IN_HOME = ("Documents", "Desktop")
 _SYNCED_ANYWHERE = ("/Library/Mobile Documents/", "/Library/CloudStorage/")
+# The largest text a tool can give is 8,388,608 bytes read in, which as
+# outside text and saved as JSON stays under this. It must fit in one blob.
+_LEAST_BLOB_BYTES = 26_214_400
+# A saved result must fit in one record. The worst text is outside text of
+# control characters: each is seven bytes once wrapped and saved as JSON,
+# and a character outside ASCII is at most four.
+_RECORD_BYTES_PER_CAP_CHAR = 8
+_RECORD_ROOM = 65_536
+_RANGES = {
+    "shell_max_seconds": (1, 3_600),
+    "output_cap_chars": (26_000, 200_000),
+    "fetch_max_bytes": (1, 8_388_608),
+    "fetch_seconds": (1, 600),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,22 +52,27 @@ class Config:
     prices: Prices
     store: StoreSettings
     run: RunSettings
+    tools: ToolSettings
 
 
 def load_config(path: Path) -> Config:
     """Read the settings file at `path`.
 
     Raises ValueError when the file has a missing, extra or wrongly typed
-    setting, a run setting out of its range, or a store folder that is not
-    allowed. A wrong settings file is a mistake to fix before anything runs.
+    setting, a run or tool setting out of its range, or a folder that is
+    not allowed. A wrong settings file is a mistake to fix before anything
+    runs.
     """
     with path.open("rb") as file:
         config = from_plain(Config, tomllib.load(file))
     check_run(config.run, config.model)
-    folder = store_folder(config.store.dir, Path.home())
-    return dataclasses.replace(
-        config, store=dataclasses.replace(config.store, dir=str(folder))
+    home = Path.home()
+    store = dataclasses.replace(
+        config.store, dir=str(store_folder(config.store.dir, home))
     )
+    tools = tool_settings(config.tools, home)
+    check_across(store, tools)
+    return dataclasses.replace(config, store=store, tools=tools)
 
 
 def check_run(run: RunSettings, model: ModelProfile) -> None:
@@ -98,3 +118,64 @@ def store_folder(setting: str, home: Path) -> Path:
     if any(part in f"{real}/" for part in _SYNCED_ANYWHERE):
         raise ValueError("store.dir is inside a folder that a sync tool copies")
     return real
+
+
+def tool_settings(tools: ToolSettings, home: Path) -> ToolSettings:
+    """Give the tool settings with `~` filled in, or raise ValueError.
+
+    The folders are not resolved: the chat's start refuses one that is
+    reached through a link, so the settings must name the real place.
+    """
+    for name, (least, most) in _RANGES.items():
+        value = getattr(tools, name)
+        if not least <= value <= most:
+            raise ValueError(f"tools.{name} must be from {least} to {most}: {value}")
+    if not 1 <= tools.shell_default_seconds <= tools.shell_max_seconds:
+        raise ValueError(
+            "tools.shell_default_seconds must be from 1 to tools.shell_max_seconds,"
+            f" not {tools.shell_default_seconds}"
+        )
+    parts = tools.shell_path.split(":")
+    if not tools.shell_path or not all(Path(part).is_absolute() for part in parts):
+        raise ValueError("every part of tools.shell_path must be an absolute path")
+    return dataclasses.replace(
+        tools,
+        work_dir=str(_tool_folder("tools.work_dir", tools.work_dir, home)),
+        scratch_dir=str(_tool_folder("tools.scratch_dir", tools.scratch_dir, home)),
+    )
+
+
+def check_across(store: StoreSettings, tools: ToolSettings) -> None:
+    """Raise ValueError for settings of two sections that do not fit together."""
+    folders = {
+        "store.dir": Path(store.dir).resolve(),
+        "tools.work_dir": Path(tools.work_dir).resolve(),
+        "tools.scratch_dir": Path(tools.scratch_dir).resolve(),
+    }
+    for name, folder in folders.items():
+        for other, place in folders.items():
+            if name != other and folder.is_relative_to(place):
+                raise ValueError(f"{name} is {other} or inside it")
+    if store.max_blob_bytes < _LEAST_BLOB_BYTES:
+        raise ValueError(
+            f"store.max_blob_bytes must be at least {_LEAST_BLOB_BYTES}, so the"
+            " largest tool result fits in a blob"
+        )
+    least = _RECORD_BYTES_PER_CAP_CHAR * tools.output_cap_chars + _RECORD_ROOM
+    if store.max_record_bytes < least:
+        raise ValueError(
+            f"store.max_record_bytes must be at least {least}: 8 times"
+            " tools.output_cap_chars, and 65,536"
+        )
+
+
+def _tool_folder(name: str, setting: str, home: Path) -> Path:
+    if setting == "~" or setting.startswith("~/"):
+        folder = home / setting[2:]
+    elif Path(setting).is_absolute():
+        folder = Path(setting)
+    else:
+        raise ValueError(f"{name} must start with ~/ or /, not {setting!r}")
+    if folder in (Path("/"), home):
+        raise ValueError(f"{name} must not be {folder}")
+    return folder
