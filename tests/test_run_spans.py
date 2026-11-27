@@ -6,7 +6,7 @@ from typing import cast
 import pytest
 
 from lamplighter.core import span_names as names
-from lamplighter.core.run_spans import LAYOUT, WholeSpan, model_name, spans_of_run
+from lamplighter.core.run_spans import SPAN_LAYOUT, WholeSpan, model_name, spans_of_run
 from lamplighter.ports import (
     Failure,
     JsonValue,
@@ -81,15 +81,19 @@ def test_each_span_hangs_under_the_right_parent_with_ids_from_its_own_events() -
     run = plain_run()
     started, _, first, _, _, result, second, *_ = run.events
     model_1, tool, step_1, model_2, step_2, whole_run = (m.span for m in spans(run))
-    trace = trace_id_for(LAYOUT, "sess-a", "run-1")
+    trace = trace_id_for(SPAN_LAYOUT, "sess-a", "run-1")
 
     assert {made.span.trace_id for made in spans(run)} == {trace}
-    assert whole_run.span_id == span_id_for(LAYOUT, "run-1", "run", started.event_id)
-    assert step_1.span_id == span_id_for(LAYOUT, "run-1", "step", first.event_id)
-    assert model_1.span_id == span_id_for(LAYOUT, "run-1", "model", first.event_id)
-    assert tool.span_id == span_id_for(LAYOUT, "run-1", "tool", result.event_id)
-    assert step_2.span_id == span_id_for(LAYOUT, "run-1", "step", second.event_id)
-    assert model_2.span_id == span_id_for(LAYOUT, "run-1", "model", second.event_id)
+    assert whole_run.span_id == span_id_for(
+        SPAN_LAYOUT, "run-1", "run", started.event_id
+    )
+    assert step_1.span_id == span_id_for(SPAN_LAYOUT, "run-1", "step", first.event_id)
+    assert model_1.span_id == span_id_for(SPAN_LAYOUT, "run-1", "model", first.event_id)
+    assert tool.span_id == span_id_for(SPAN_LAYOUT, "run-1", "tool", result.event_id)
+    assert step_2.span_id == span_id_for(SPAN_LAYOUT, "run-1", "step", second.event_id)
+    assert model_2.span_id == span_id_for(
+        SPAN_LAYOUT, "run-1", "model", second.event_id
+    )
     assert whole_run.parent_id is None
     assert step_1.parent_id == step_2.parent_id == whole_run.span_id
     assert model_1.parent_id == tool.parent_id == step_1.span_id
@@ -119,7 +123,7 @@ def test_every_span_holds_the_session_the_run_the_config_and_the_layout() -> Non
         assert attributes[names.CONVERSATION_ID] == "sess-a"
         assert attributes[names.RUN_ID] == "run-1"
         assert attributes[names.CONFIG_ID] == CONFIG
-        assert attributes[names.LAYOUT] == LAYOUT
+        assert attributes[names.LAYOUT] == SPAN_LAYOUT
 
 
 def test_each_span_has_the_seq_of_the_event_its_id_is_made_from() -> None:
@@ -141,7 +145,7 @@ def test_the_plain_run_has_every_attribute_of_the_table_with_its_value() -> None
         names.CONVERSATION_ID: "sess-a",
         names.RUN_ID: "run-1",
         names.CONFIG_ID: CONFIG,
-        names.LAYOUT: LAYOUT,
+        names.LAYOUT: SPAN_LAYOUT,
     }
 
     assert whole_run.attributes == {

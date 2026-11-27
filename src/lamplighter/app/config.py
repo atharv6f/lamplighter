@@ -1,6 +1,7 @@
 """Reads the settings file."""
 
 import dataclasses
+import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +23,9 @@ _LEAST_BLOB_BYTES = 26_214_400
 # and a character outside ASCII is at most four.
 _RECORD_BYTES_PER_CAP_CHAR = 8
 _RECORD_ROOM = 65_536
+# Small letters only: Phoenix reads some words with capitals in an address
+# as one of its own ids, and then never finds the project.
+_PROJECT = re.compile(r"[a-z][a-z0-9_-]{0,63}")
 _RANGES = {
     "shell_max_seconds": (1, 3_600),
     "output_cap_chars": (26_000, 200_000),
@@ -45,6 +49,18 @@ class StoreSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class TraceSettings:
+    """Where spans go: the trace store's address and the project they go under.
+
+    The address is not checked here. The sink built on it refuses any
+    address that is not on this Mac, so one check covers every sink.
+    """
+
+    phoenix_url: str
+    project: str
+
+
+@dataclass(frozen=True, slots=True)
 class Config:
     """Everything the settings file holds."""
 
@@ -53,19 +69,22 @@ class Config:
     store: StoreSettings
     run: RunSettings
     tools: ToolSettings
+    traces: TraceSettings
 
 
 def load_config(path: Path) -> Config:
     """Read the settings file at `path`.
 
     Raises ValueError when the file has a missing, extra or wrongly typed
-    setting, a run or tool setting out of its range, or a folder that is
-    not allowed. A wrong settings file is a mistake to fix before anything
+    setting, a run or tool setting out of its range, a trace setting that
+    is empty or badly formed, or a folder that is not allowed. A wrong
+    settings file is a mistake to fix before anything
     runs.
     """
     with path.open("rb") as file:
         config = from_plain(Config, tomllib.load(file))
     check_run(config.run, config.model)
+    check_traces(config.traces)
     home = Path.home()
     store = dataclasses.replace(
         config.store, dir=str(store_folder(config.store.dir, home))
@@ -97,6 +116,17 @@ def check_run(run: RunSettings, model: ModelProfile) -> None:
         raise ValueError(
             f"run.model_max_output is {run.model_max_output}, above the"
             f" model's max_output of {model.max_output}"
+        )
+
+
+def check_traces(traces: TraceSettings) -> None:
+    """Raise ValueError for an empty address or a project name Phoenix may misread."""
+    if not traces.phoenix_url:
+        raise ValueError("traces.phoenix_url is empty")
+    if _PROJECT.fullmatch(traces.project) is None:
+        raise ValueError(
+            "traces.project must be 1 to 64 of a-z, 0-9, - and _, with a letter"
+            f" first, not {traces.project!r}"
         )
 
 

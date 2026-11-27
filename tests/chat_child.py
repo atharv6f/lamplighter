@@ -10,6 +10,10 @@ wall. Every tool start is written to the file `started.txt` in FOLDER, one
 line each, before the tool runs. A write reaches the operating system at
 once, so a kill does not lose it.
 
+The chat sends its spans to a sink that adds them to the file
+`spans_sent.jsonl` in FOLDER, and keeps its cursor in the store folder as
+the real chat does.
+
 When its input is a terminal, the child makes that terminal its own, so a
 Ctrl-C typed there reaches it as a signal.
 """
@@ -28,6 +32,7 @@ from pathlib import Path
 from typing import Literal
 
 from lamplighter.adapters import (
+    FileTraceCursor,
     ScriptedReply,
     ScriptedTool,
     ScriptedTools,
@@ -38,7 +43,7 @@ from lamplighter.adapters.seatbelt import SeatbeltExecutor
 from lamplighter.adapters.sqlite import SqliteEventLog, SqliteInbox, open_database
 from lamplighter.app.chat import Tooling, chat
 from lamplighter.app.config import Config, load_config
-from lamplighter.app.main import chat_parts
+from lamplighter.app.main import chat_parts, trace_cursor
 from lamplighter.ports import (
     BlobStore,
     Executor,
@@ -61,6 +66,7 @@ from tests.kill_kit import Turn, answers, call, last_said
 from tests.model_by_request import Choose, ModelByRequest
 from tests.model_samples import PROFILE
 from tests.run_history import inbound, stop
+from tests.span_file import SPANS_SENT, SpanFileSink
 from tests.stub_tools import StubTools
 from tests.tooling_kit import tooling_for, with_tool_folders
 
@@ -330,6 +336,11 @@ def config_for(folder: Path, cancel_bound_ms: int) -> Config:
     )
 
 
+def span_cursor(folder: Path) -> FileTraceCursor:
+    """Give the trace cursor the child keeps in `folder`, as the chat builds it."""
+    return trace_cursor(config_for(folder, 1))
+
+
 def builtin_tooling(
     config: Config, walled: bool, record: Path
 ) -> Callable[[BlobStore], Tooling]:
@@ -397,6 +408,8 @@ def main() -> int:
         config,
         ModelByRequest(numbered(acts.choose), clock, acts.model_seconds),
         _tooling(config, acts, folder / STARTED),
+        SpanFileSink(folder / SPANS_SENT),
+        trace_cursor(config),
         sys.stdin.fileno(),
         sys.stdout,
         sys.stderr,

@@ -312,3 +312,14 @@ def test_a_cancel_is_passed_on_and_the_next_export_works(where: str) -> None:
         names = server.names()
 
     assert set(names) == {span.span_id for span in BATCH}
+
+
+def test_a_sink_on_localhost_sends_nothing_to_the_server_listening_there() -> None:
+    with stand_in() as server:
+        port = server.url.rsplit(":", 1)[1]
+        sent = export(f"http://localhost:{port}")
+        reached = len(server.asked)
+
+    failed = failure_of(sent)
+    assert (failed.kind, failed.effect) == ("denied", "none")
+    assert reached == 0

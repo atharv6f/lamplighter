@@ -13,12 +13,14 @@ import httpx
 
 from lamplighter.adapters import (
     FileBlobStore,
+    FileTraceCursor,
     SystemClock,
     SystemIds,
     TerminalChannel,
 )
 from lamplighter.adapters.anthropic import AnthropicModel
 from lamplighter.adapters.builtin_tools import BuiltinTools, system_web
+from lamplighter.adapters.phoenix import PhoenixSink, local_address
 from lamplighter.adapters.seatbelt import SeatbeltExecutor
 from lamplighter.adapters.sqlite import (
     SqliteEffectLedger,
@@ -33,7 +35,16 @@ from lamplighter.adapters.sqlite import (
 )
 from lamplighter.app.chat import ChatParts, Stores, Tooling, chat
 from lamplighter.app.config import Config, load_config
-from lamplighter.ports import BlobStore, Clock, Failure, ModelClient
+from lamplighter.core import SPAN_LAYOUT
+from lamplighter.ports import (
+    BlobStore,
+    Clock,
+    Failure,
+    ModelClient,
+    TraceCursor,
+    TraceSink,
+    canonical_json,
+)
 
 NO_KEY = "ANTHROPIC_API_KEY is not set."
 # How long a write waits for another process that holds the store's lock.
@@ -43,6 +54,30 @@ STORE_TIMEOUT_S = 5.0
 def build_model(config: Config, api_key: str) -> ModelClient:
     """Build the client for the model the settings name."""
     return AnthropicModel(config.model, api_key, httpx.AsyncClient(), SystemClock())
+
+
+def trace_sink(config: Config, clock: Clock) -> PhoenixSink:
+    """Build the sink for the trace store the settings name.
+
+    The client takes no proxy from the environment, so spans for an
+    address on this Mac can never be routed through another machine.
+    """
+    http = httpx.AsyncClient(trust_env=False, follow_redirects=False)
+    traces = config.traces
+    return PhoenixSink(traces.phoenix_url, traces.project, http, clock)
+
+
+def trace_cursor(config: Config) -> FileTraceCursor:
+    """Build the cursor of the trace store, project and span layout in the settings.
+
+    The target holds the address the loopback rule gives back, or none.
+    The setting itself never goes in: one that fails the rule may hold any
+    text. With no address, every command refuses the sink first, so that
+    cursor is never read or written.
+    """
+    address = local_address(config.traces.phoenix_url) or ""
+    target = canonical_json([address, config.traces.project, SPAN_LAYOUT])
+    return FileTraceCursor(Path(config.store.dir), target)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -96,9 +131,17 @@ def _chat(config: Config, session_id: str | None) -> int:
         print(NO_KEY, file=sys.stderr)
         return 1
     model = build_model(config, key)
-    tooling = builtin_tooling(config, SystemClock())
+    clock = SystemClock()
+    tooling = builtin_tooling(config, clock)
     parts = chat_parts(
-        config, model, tooling, sys.stdin.fileno(), sys.stdout, sys.stderr
+        config,
+        model,
+        tooling,
+        trace_sink(config, clock),
+        trace_cursor(config),
+        sys.stdin.fileno(),
+        sys.stdout,
+        sys.stderr,
     )
     return chat(config, session_id, parts)
 
@@ -121,11 +164,17 @@ def chat_parts(
     config: Config,
     model: ModelClient,
     tooling: Callable[[BlobStore], Tooling],
+    sink: TraceSink,
+    cursor: TraceCursor,
     reader: int,
     writer: TextIO,
     errors: TextIO,
 ) -> ChatParts:
-    """Build a chat on the SQLite store and a terminal that reads `reader`."""
+    """Build a chat on the SQLite store and a terminal that reads `reader`.
+
+    The chat sends the spans of its log to `sink`, and keeps how far it got
+    in `cursor`.
+    """
     clock = SystemClock()
     ids = SystemIds()
 
@@ -135,7 +184,18 @@ def chat_parts(
     def terminal(session_id: str) -> TerminalChannel:
         return TerminalChannel(session_id, clock, ids, reader, writer)
 
-    return ChatParts(model, tooling, clock, ids, open_stores, terminal, writer, errors)
+    return ChatParts(
+        model,
+        tooling,
+        clock,
+        ids,
+        open_stores,
+        terminal,
+        writer,
+        errors,
+        sink,
+        cursor,
+    )
 
 
 def sqlite_stores(folder: Path, config: Config, clock: Clock) -> Stores | Failure:

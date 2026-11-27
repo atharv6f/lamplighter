@@ -2,9 +2,10 @@
 
 import asyncio
 import dataclasses
+import logging
 import os
 import signal
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn, TextIO
@@ -19,9 +20,12 @@ from lamplighter.core import (
     Deps,
     RunningSessions,
     RunSpec,
+    TraceProjector,
     Wake,
     config_id,
     drive,
+    pass_to_the_end,
+    project_while_open,
     run_intake,
     take,
     unfinished_work,
@@ -40,8 +44,12 @@ from lamplighter.ports import (
     ModelClient,
     Outbox,
     ToolProvider,
+    TraceCursor,
+    TraceSink,
     is_id,
 )
+
+_log = logging.getLogger(__name__)
 
 LOCK_HELD = "Another lamplighter process is using this store."
 UNSETTLED = (
@@ -58,6 +66,22 @@ WAITING = (
 )
 LEAVING = "Exiting now. The next start carries on from what is saved."
 LEAVE_CODE = 130
+# The setting is not shown: it failed the rule, so it may hold anything.
+OFF_THIS_MAC = (
+    "Traces go only to a trace store on this Mac. traces.phoenix_url must be"
+    " http://127.0.0.1: and a port, such as http://127.0.0.1:6006."
+)
+NOT_SENT = (
+    "Spans are not being sent: {message} Runs go on, and the spans are sent"
+    " once this is cured."
+)
+SENDING_STOPPED = (
+    "Sending spans stopped: {message} This chat sends no more spans."
+    " Try: lamplighter traces export"
+)
+PROJECTOR_RAISED = (
+    "Sending spans stopped after an error in the projector. The chat goes on."
+)
 # The signals that end the chat at once: the terminal closed, or a `kill`.
 _ENDINGS = (signal.SIGHUP, signal.SIGTERM)
 # The command that brings on the wall's self-test before the first message.
@@ -92,7 +116,8 @@ class ChatParts:
     The store, the tools and the terminal are given as functions, because
     the store is opened only once the folder is locked, the tools are made
     only once their folders are, with the store's blobs, and the terminal is
-    made only once the session id is known.
+    made only once the session id is known. The chat sends the spans of
+    the log to `sink` and keeps how far it got in `cursor`.
     """
 
     model: ModelClient
@@ -103,17 +128,22 @@ class ChatParts:
     terminal: Callable[[str], TerminalChannel]
     writer: TextIO
     errors: TextIO
+    sink: TraceSink
+    cursor: TraceCursor
 
 
 def chat(config: Config, session_id: str | None, parts: ChatParts) -> int:
     """Talk to one session until the input ends, and give the exit code.
 
-    With no session id a new session is started. The store folder is made
-    and locked before the store is opened, so a second process is refused
-    before it touches anything.
+    With no session id a new session is started. A trace store that is not
+    on this Mac is refused before anything is made. The store folder is
+    made and locked before the store is opened, so a second process is
+    refused before it touches anything.
     """
     if session_id is not None and not is_id(session_id):
         return _refused(f"The session id {session_id!r} breaks the id rule.", parts)
+    if parts.sink.leaves_this_mac:
+        return _refused(OFF_THIS_MAC, parts)
     folder = Path(config.store.dir)
     held = lock_store(folder)
     if held is None:
@@ -179,8 +209,14 @@ async def _serve(
         observers=progress_lines(terminal.show_line),
         running=running,
     )
+    projector = TraceProjector(stores.log, parts.sink, parts.cursor)
     failed = await _talk(
-        session_id, run_spec(config, tooling), deps, terminal, tooling.executor
+        session_id,
+        run_spec(config, tooling),
+        deps,
+        terminal,
+        tooling.executor,
+        projector,
     )
     return 0 if failed is None else _refused(failed.message, parts)
 
@@ -191,11 +227,15 @@ async def _talk(
     deps: Deps,
     terminal: TerminalChannel,
     executor: Executor,
+    projector: TraceProjector,
 ) -> Failure | None:
     """Run the intake and the driver, with Ctrl-C handled, until both end.
 
     A closed terminal or a plain `kill` ends the process at once, as a
-    second Ctrl-C does, once the commands still running are killed.
+    second Ctrl-C does, once the commands still running are killed. The
+    projector runs beside them, and makes its last passes while the
+    handlers are still in place, so a signal then still ends the process
+    the same way.
     """
     wake = Wake()
 
@@ -217,6 +257,7 @@ async def _talk(
     loop.add_signal_handler(signal.SIGINT, keys.pressed)
     for ending in _ENDINGS:
         loop.add_signal_handler(ending, _ended_by, ending, executor)
+    projecting = _start_projecting(projector, deps.clock, terminal.show_line)
     try:
         intake = asyncio.ensure_future(
             run_intake(terminal, deps.inbox, deps.running, wake.wake, wake.end_input)
@@ -229,12 +270,54 @@ async def _talk(
             # The input may still be open, as after Ctrl-C at the prompt.
             intake.cancel()
         await asyncio.wait([intake])
+        await _stop_projecting(projecting, projector, deps.clock, terminal.show_line)
     finally:
+        projecting.cancel()
         for handled in (signal.SIGINT, *_ENDINGS):
             loop.remove_signal_handler(handled)
     if driven is not None:
         return driven
     return None if intake.cancelled() else intake.result()
+
+
+def _start_projecting(
+    projector: TraceProjector, clock: Clock, show_line: Callable[[str], None]
+) -> asyncio.Task[None]:
+    """Start sending spans for as long as the chat lives, each failure told once."""
+
+    def first_failure(failure: Failure) -> None:
+        show_line(NOT_SENT.format(message=failure.message))
+
+    def ended(failure: Failure) -> None:
+        show_line(SENDING_STOPPED.format(message=failure.message))
+
+    loop = project_while_open(projector.run_pass, clock, first_failure, ended)
+    return asyncio.ensure_future(_guarded(loop, show_line))
+
+
+async def _stop_projecting(
+    projecting: asyncio.Task[None],
+    projector: TraceProjector,
+    clock: Clock,
+    show_line: Callable[[str], None],
+) -> None:
+    """Cancel the task, and if it was still alive, send what is left."""
+    # A task that ended by itself ended on a failure or a bug, and a last
+    # pass would meet the same again.
+    alive = not projecting.done()
+    projecting.cancel()
+    await asyncio.wait([projecting])
+    if alive:
+        await _guarded(pass_to_the_end(projector.run_pass, clock), show_line)
+
+
+async def _guarded(work: Awaitable[None], show_line: Callable[[str], None]) -> None:
+    # The projector raising is a bug in it, and it must not reach a run.
+    try:
+        await work
+    except Exception:
+        _log.exception("The projector raised.")
+        show_line(PROJECTOR_RAISED)
 
 
 def leave_now(terminal: TerminalChannel, executor: Executor) -> NoReturn:

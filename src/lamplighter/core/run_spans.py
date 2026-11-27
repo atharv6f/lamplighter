@@ -34,7 +34,7 @@ from lamplighter.ports import (
 # The number of the rules in this file: which spans a run gives and what
 # each holds. A change to them needs a new number, so that new spans never
 # meet old ones in a store that keeps the first copy of an id.
-LAYOUT = 1
+SPAN_LAYOUT = 1
 
 # A model name as a provider writes one. It keeps out a sentence, a line
 # break and the control characters a terminal acts on.
@@ -110,19 +110,19 @@ class _RunFacts:
         common: dict[str, JsonValue] = {
             names.CONVERSATION_ID: started.session_id,
             names.RUN_ID: run_id,
-            names.LAYOUT: LAYOUT,
+            names.LAYOUT: SPAN_LAYOUT,
         }
         _put(common, names.CONFIG_ID, _text(started.payload, "config_id"))
         return _RunFacts(
             started=started,
             run_id=run_id,
-            trace_id=trace_id_for(LAYOUT, started.session_id, run_id),
-            span_id=span_id_for(LAYOUT, run_id, "run", started.event_id),
+            trace_id=trace_id_for(SPAN_LAYOUT, started.session_id, run_id),
+            span_id=span_id_for(SPAN_LAYOUT, run_id, "run", started.event_id),
             common=common,
         )
 
     def span_for(self, role: SpanKind, made_from: Event) -> str:
-        return span_id_for(LAYOUT, self.run_id, role, made_from.event_id)
+        return span_id_for(SPAN_LAYOUT, self.run_id, role, made_from.event_id)
 
 
 @dataclass(slots=True)

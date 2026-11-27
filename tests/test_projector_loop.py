@@ -5,7 +5,7 @@ from collections.abc import Sequence
 
 import pytest
 
-from lamplighter.core.projector_loop import project_while_open
+from lamplighter.core.projector_loop import pass_to_the_end, project_while_open
 from lamplighter.core.trace_projector import PassDone
 from lamplighter.ports import Failure, FailureKind
 from tests.fake_clock import FakeClock
@@ -135,3 +135,79 @@ def test_a_cancel_during_a_pass_ends_the_loop() -> None:
             await task
 
     asyncio.run(cancelled())
+
+
+def test_a_pass_that_never_waits_still_gives_the_chat_its_turn() -> None:
+    async def beside() -> list[int]:
+        turns: list[int] = []
+        script = Script([BUSY] * 5 + [FATAL])
+
+        async def chat() -> None:
+            # The chat beside the loop, which wants a turn now and then.
+            for _ in range(3):
+                turns.append(script.passes)
+                await asyncio.sleep(0)
+
+        talking = asyncio.ensure_future(chat())
+        await project_while_open(script.run_pass, FakeClock(), print, print)
+        await talking
+        return turns
+
+    # Without a turn between busy passes, the chat would first run after
+    # the loop had ended, at pass 6.
+    assert asyncio.run(beside()) == [1, 2, 3]
+
+
+def last_passes(results: Sequence[PassDone | Failure]) -> tuple[Script, FakeClock]:
+    script, clock = Script(results), FakeClock()
+    asyncio.run(pass_to_the_end(script.run_pass, clock))
+    return script, clock
+
+
+def test_the_last_passes_go_on_until_one_has_nothing_to_do() -> None:
+    script, _ = last_passes([BUSY, BUSY, IDLE, BUSY])
+
+    assert script.passes == 3
+
+
+@pytest.mark.parametrize("failure", [DOWN, FATAL])
+def test_the_last_passes_stop_at_the_first_failure(failure: Failure) -> None:
+    script, _ = last_passes([BUSY, failure, BUSY, IDLE])
+
+    assert script.passes == 2
+
+
+def test_a_last_pass_still_under_way_after_2_seconds_is_cancelled() -> None:
+    async def hung() -> list[str]:
+        noted: list[str] = []
+        clock = WaitingClock()
+
+        async def stuck() -> PassDone | Failure:
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                noted.append(f"cancelled at {clock.seconds}")
+                raise
+            return IDLE
+
+        ending = asyncio.ensure_future(pass_to_the_end(stuck, clock))
+        await clock.advance(1.99)
+        noted.append(f"done at 1.99: {ending.done()}")
+        await clock.advance(0.01)
+        noted.append(f"done at 2: {ending.done()}")
+        await ending
+        return noted
+
+    assert asyncio.run(hung()) == [
+        "done at 1.99: False",
+        "cancelled at 2.0",
+        "done at 2: True",
+    ]
+
+
+def test_a_last_pass_that_raises_raises_to_the_caller() -> None:
+    async def broken() -> PassDone | Failure:
+        raise RuntimeError("a made-up bug")
+
+    with pytest.raises(RuntimeError, match="a made-up bug"):
+        asyncio.run(pass_to_the_end(broken, FakeClock()))

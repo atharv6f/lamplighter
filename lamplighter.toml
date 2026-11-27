@@ -77,3 +77,10 @@ output_cap_chars = 30_000
 # with its redirects may take.
 fetch_max_bytes = 5_242_880
 fetch_seconds = 30
+
+# Where spans go. Phoenix runs on this Mac: start it with scripts/phoenix/start.sh.
+[traces]
+# Phoenix's address: http://127.0.0.1: and its port. No other form is taken.
+phoenix_url = "http://127.0.0.1:6006"
+# The Phoenix project the spans are filed under.
+project = "lamplighter"
