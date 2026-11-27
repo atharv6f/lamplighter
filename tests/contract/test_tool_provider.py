@@ -13,7 +13,6 @@ from lamplighter.adapters import (
     MadeUpWorld,
     ScriptedTool,
     ScriptedTools,
-    StubTools,
     WorldTools,
 )
 from lamplighter.core.arguments_check import unsupported
@@ -26,6 +25,7 @@ from lamplighter.ports import (
     ToolSpec,
 )
 from tests.builtin_kit import tools_on
+from tests.stub_tools import StubTools
 from tests.waiting_clock import WaitingClock, settle
 
 type Call = tuple[str, JsonObject]

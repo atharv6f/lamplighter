@@ -16,7 +16,6 @@ from lamplighter.adapters.scripted_tools import (
     ScriptedTools,
     ToolCallNote,
 )
-from lamplighter.adapters.stub_tools import StubTools
 from lamplighter.adapters.system_clock import SystemClock
 from lamplighter.adapters.system_ids import SystemIds
 from lamplighter.adapters.terminal import TerminalChannel
@@ -29,7 +28,6 @@ __all__ = [
     "ScriptedChannel",
     "ScriptedTool",
     "ScriptedTools",
-    "StubTools",
     "SystemIds",
     "TerminalChannel",
     "ToolCallNote",

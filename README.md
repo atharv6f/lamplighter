@@ -10,7 +10,9 @@ Model access is built: one interface for asking a model for a reply, a scripted 
 
 Saved state is built: a log of every session's events, a ledger of the actions the agent takes, a store for large files, an inbox for incoming messages and an outbox for replies. They are kept in one SQLite file and a folder of files, and they survive the process being killed at any moment.
 
-The agent loop and a terminal chat are built. The loop asks the model, runs the tools it asks for, and saves every step before the next, so a run cut off by a kill is carried on at the next start. It has limits on steps, time, tokens and money, and it can be stopped. Two small tools are there to try it with: `current_time` and `wait`.
+The agent loop and a terminal chat are built. The loop asks the model, runs the tools it asks for, and saves every step before the next, so a run cut off by a kill is carried on at the next start. It has limits on steps, time, tokens and money, and it can be stopped.
+
+Seven tools are built in. `read_file`, `write_file` and `edit_file` work on files in one folder, the work folder. `search_files` searches it, `shell` runs one command line in it, `web_fetch` reads a page from a public web address, and `read_output` reads the rest of a result that was too long to give whole. A change to a file goes through the action ledger, so after a kill the agent checks whether it happened and never makes it twice. Commands run inside macOS's sandbox: they can write only in the work folder and a scratch folder, cannot read your home folder or the store, and have no network.
 
 ## Layout
 
@@ -31,7 +33,7 @@ make check
 
 `make check` runs the formatter check, lint, type check, import rule and tests. The code rules are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
-`lamplighter.toml` holds the settings: the model, its limits and its prices, where the saved state lives, and how one run behaves. No secret goes in it.
+`lamplighter.toml` holds the settings: the model, its limits and its prices, where the saved state lives, how one run behaves, and where the tools work. No secret goes in it.
 
 ## Chat
 
@@ -42,7 +44,9 @@ uv run --env-file .env lamplighter chat --session SESSION  # carry on a session
 
 Each line you type is one message. One line is printed before each model call and each tool call, then the reply. Type `stop`, or press Ctrl-C, to stop a run. A second Ctrl-C during the same run leaves at once with exit code 130, and the next start carries on from what is saved. Ctrl-C or Ctrl-D at the prompt leaves.
 
-One process at a time can use a store. At start, any other session with work waiting is listed with the command that carries it on.
+One process at a time can use a store. At start, any other session with work waiting is listed with the command that carries it on, and so is the count of actions whose outcome is not known.
+
+The tools work in `~/lamplighter-work`, and commands get a home folder and a temp folder in `~/Library/Caches/Lamplighter`. Both are made at start if they are missing. A folder reached through a symbolic link is refused: write its real path in the settings. If the sandbox cannot be put up, the chat says so and starts anyway: commands and searches then fail, and the file tools and `web_fetch` still work.
 
 ## Saved state
 
@@ -75,9 +79,19 @@ The chat has its own kill tests. In one process, a chat is killed just before an
 
 `uv run python scripts/commit_timing.py` prints how long a commit takes on this machine, with the Mac's full flush on and off. It writes only in a temporary folder.
 
+## Sandbox tests
+
+The tests of the sandbox need macOS, so `make check` leaves them out. Run them on a Mac:
+
+```
+uv run pytest -m sandbox
+```
+
+They try each known way out of the sandbox and check what must still work inside it. CI runs them on a macOS runner.
+
 ## Live tests
 
-Eight tests call the real Anthropic API. Three of them run the loop on a real store with the stub tools. They cost a little money, so `make check` leaves them out.
+Ten tests call the real Anthropic API. Five of them run the loop on a real store with the built-in tools, and their commands run in the sandbox, so they need macOS. They cost a little money, so `make check` leaves them out.
 
 Put your API key in a file named `.env` in this folder. Git ignores that file. It holds one line:
 

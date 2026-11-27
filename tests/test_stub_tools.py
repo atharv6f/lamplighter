@@ -2,9 +2,9 @@ import asyncio
 
 import pytest
 
-from lamplighter.adapters import StubTools
 from lamplighter.ports import JsonObject, ToolResult
 from tests.fake_clock import FakeClock
+from tests.stub_tools import StubTools
 from tests.waiting_clock import WaitingClock, settle
 
 

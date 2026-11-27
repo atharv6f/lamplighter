@@ -26,7 +26,6 @@ from lamplighter.adapters import (
     ScriptedReply,
     ScriptedTool,
     ScriptedTools,
-    StubTools,
     SystemClock,
 )
 from lamplighter.adapters.sqlite import SqliteEventLog, SqliteInbox, open_database
@@ -51,6 +50,8 @@ from tests.kill_kit import Turn, answers, call, last_said
 from tests.model_by_request import Choose, ModelByRequest
 from tests.model_samples import PROFILE
 from tests.run_history import inbound, stop
+from tests.stub_tools import StubTools
+from tests.tooling_kit import tooling_for, with_tool_folders
 
 ROOT = Path(__file__).parents[1]
 SESSION = "sess-a"
@@ -232,10 +233,7 @@ def config_for(folder: Path, cancel_bound_ms: int) -> Config:
         config.run, model_max_output=1_000, cancel_bound_ms=cancel_bound_ms
     )
     return dataclasses.replace(
-        config,
-        model=PROFILE,
-        store=dataclasses.replace(config.store, dir=str(folder)),
-        run=run,
+        with_tool_folders(config, folder), model=PROFILE, run=run
     )
 
 
@@ -287,7 +285,7 @@ def main() -> int:
     parts = chat_parts(
         config,
         ModelByRequest(numbered(acts.choose), clock, acts.model_seconds),
-        RecordedTools(tools, folder / STARTED),
+        tooling_for(config, RecordedTools(tools, folder / STARTED)),
         sys.stdin.fileno(),
         sys.stdout,
         sys.stderr,

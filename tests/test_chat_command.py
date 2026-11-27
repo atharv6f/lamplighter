@@ -21,9 +21,9 @@ import pytest
 
 from lamplighter.adapters import (
     ScriptedReply,
-    StubTools,
     SystemClock,
 )
+from lamplighter.adapters.in_memory import InMemoryBlobStore
 from lamplighter.adapters.sqlite import (
     SqliteEffectLedger,
     SqliteEventLog,
@@ -31,13 +31,25 @@ from lamplighter.adapters.sqlite import (
     SqliteOutbox,
     open_database,
 )
-from lamplighter.app.chat import LOCK_HELD, UNSETTLED, WAITING, ChatParts, chat
+from lamplighter.app.chat import (
+    LOCK_HELD,
+    NO_WALL,
+    UNSETTLED,
+    WAITING,
+    ChatParts,
+    chat,
+    run_spec,
+)
 from lamplighter.app.config import Config, load_config
-from lamplighter.app.main import NO_KEY, chat_parts, main
+from lamplighter.app.main import NO_KEY, builtin_tooling, chat_parts, main
 from lamplighter.app.single_instance import lock_store
+from lamplighter.app.tool_folders import THROUGH_A_LINK
+from lamplighter.core import config_id
 from lamplighter.ports import (
+    Command,
     EffectLedger,
     EventLog,
+    ExecResult,
     Failure,
     Inbox,
     ModelRequest,
@@ -53,7 +65,9 @@ from tests.model_by_request import Choose, ModelByRequest, assistant_turns
 from tests.model_samples import PROFILE
 from tests.run_history import AT, inbound
 from tests.store_samples import action
+from tests.stub_tools import StubTools
 from tests.terminal_kit import Keyboard, Screen, typed
+from tests.tooling_kit import ENDED_WELL, Answer, tooling_for, with_tool_folders
 
 SETTINGS = Path(__file__).parents[1] / "lamplighter.toml"
 CHAT_SECONDS = 20.0
@@ -61,11 +75,10 @@ USAGE = Usage(input_uncached=100, cache_read=0, cache_write=0, output=20)
 
 
 def config_in(tmp_path: Path) -> Config:
-    config = load_config(SETTINGS)
+    config = with_tool_folders(load_config(SETTINGS), tmp_path / "store")
     return dataclasses.replace(
         config,
         model=PROFILE,
-        store=dataclasses.replace(config.store, dir=str(tmp_path / "store")),
         run=dataclasses.replace(config.run, model_max_output=1_000),
     )
 
@@ -88,11 +101,12 @@ def parts_for(
     screen: io.StringIO,
     errors: io.StringIO,
     choose: Choose = answers,
+    answer: Answer = lambda command: ENDED_WELL,
 ) -> ChatParts:
     return chat_parts(
         config,
         ModelByRequest(choose),
-        StubTools(SystemClock()),
+        tooling_for(config, StubTools(SystemClock()), answer),
         keyboard.reader,
         screen,
         errors,
@@ -105,6 +119,8 @@ def chat_with(
     session: str | None = None,
     choose: Choose = answers,
     person: Callable[[Screen], None] | None = None,
+    answer: Answer = lambda command: ENDED_WELL,
+    config: Config | None = None,
 ) -> tuple[int, str, str]:
     """Run one chat, with the person playing beside it, and give what it did."""
     screen, errors = Screen(), io.StringIO()
@@ -122,9 +138,11 @@ def chat_with(
     watchdog = threading.Timer(CHAT_SECONDS, end_input)
     watchdog.start()
     try:
-        config = config_in(tmp_path)
+        config = config or config_in(tmp_path)
         code = chat(
-            config, session, parts_for(config, keyboard, screen, errors, choose)
+            config,
+            session,
+            parts_for(config, keyboard, screen, errors, choose, answer),
         )
     finally:
         watchdog.cancel()
@@ -260,16 +278,99 @@ async def unsettled_with_no_open_run(saved: Saved) -> None:
 @pytest.mark.parametrize(
     "unsettled", [unsettled_in_an_open_run, unsettled_with_no_open_run]
 )
-def test_an_action_whose_outcome_is_not_known_stops_the_start(
+def test_an_action_whose_outcome_is_not_known_is_counted_and_the_chat_starts(
     tmp_path: Path, unsettled: Callable[[Saved], Coroutine[Any, Any, None]]
 ) -> None:
     fill(tmp_path, unsettled)
-    code, screen, errors = chat_with(tmp_path, typed(b"Hello.\n"))
+    code, screen, errors = chat_with(tmp_path, typed(b"Hello.\n"), session="sess-a")
+    assert (code, errors) == (0, "")
+    assert UNSETTLED.format(n=1) in screen.splitlines()
+    assert "Answer 1." in screen
+    assert UNSETTLED.format(n=1) == (
+        "1 actions have an outcome that is not known."
+        " List them with: lamplighter store sessions"
+    )
+
+
+def test_the_first_command_runs_before_the_first_message_and_brings_on_the_wall(
+    tmp_path: Path,
+) -> None:
+    seen: list[Command] = []
+
+    def answer(command: Command) -> ExecResult | Failure:
+        seen.append(command)
+        return ENDED_WELL
+
+    code, screen, _ = chat_with(tmp_path, typed(b"Hello.\n"), answer=answer)
+    assert code == 0 and "Answer 1." in screen
+    config = config_in(tmp_path)
+    assert seen == [
+        Command(
+            argv=("/usr/bin/true",),
+            cwd=config.tools.work_dir,
+            env={},
+            profile="read_only",
+            wall_ms=5_000,
+            capture_bytes=1_000,
+        )
+    ]
+    assert not any("sandbox" in line for line in screen.splitlines())
+
+
+def test_a_wall_that_is_down_is_said_and_the_chat_starts(tmp_path: Path) -> None:
+    down = Failure("unavailable", "none", "The wall needs macOS.", "test")
+    code, screen, errors = chat_with(
+        tmp_path, typed(b"Hello.\n"), answer=lambda command: down
+    )
+    assert (code, errors) == (0, "")
+    line = NO_WALL.format(message=down.message)
+    assert line in screen.splitlines()
+    assert line == (
+        "The sandbox is not available: The wall needs macOS. Commands and"
+        " searches will fail. File tools and web_fetch still work."
+    )
+    assert screen.index(line) < screen.index("Answer 1.")
+
+
+def test_another_failure_of_the_first_command_is_not_called_a_wall_down(
+    tmp_path: Path,
+) -> None:
+    refused = Failure("invalid_input", "none", "made-up", "test")
+    code, screen, _ = chat_with(
+        tmp_path, typed(b"Hello.\n"), answer=lambda command: refused
+    )
+    assert code == 0 and "sandbox" not in screen
+
+
+def test_the_start_makes_the_tool_folders_private(tmp_path: Path) -> None:
+    code, _, _ = chat_with(tmp_path, typed(b""))
+    tools = config_in(tmp_path).tools
+    assert code == 0
+    for folder in (
+        tools.work_dir,
+        tools.scratch_dir,
+        f"{tools.scratch_dir}/home",
+        f"{tools.scratch_dir}/tmp",
+    ):
+        assert stat.S_IMODE(os.stat(folder).st_mode) == 0o700, folder
+
+
+def test_a_work_folder_reached_through_a_link_stops_the_start(tmp_path: Path) -> None:
+    config = config_in(tmp_path)
+    real = tmp_path / "real-work"
+    real.mkdir()
+    Path(config.tools.work_dir).symlink_to(real)
+    code, screen, errors = chat_with(tmp_path, typed(b"Hello.\n"), config=config)
     assert (code, screen) == (1, "")
-    assert errors == UNSETTLED + "\n"
-    assert UNSETTLED == (
-        "The store holds an action whose outcome is not known."
-        " This version cannot settle it, so it will not start."
+    assert errors == (
+        THROUGH_A_LINK.format(
+            setting="tools.work_dir", path=config.tools.work_dir, real=real
+        )
+        + "\n"
+    )
+    assert errors == (
+        f"tools.work_dir is {config.tools.work_dir}, which is reached through a"
+        f" symbolic link to {real}. Write the resolved path in the settings file.\n"
     )
 
 
@@ -355,3 +456,40 @@ def test_the_end_of_input_during_a_run_still_shows_the_reply(tmp_path: Path) -> 
     code, screen, _ = chat_with(tmp_path, typed(b"Hello."))
     assert code == 0
     assert "Answer 1." in screen
+
+
+def test_the_run_spec_carries_the_wall_and_its_id_covers_all_six(
+    tmp_path: Path,
+) -> None:
+    config = config_in(tmp_path)
+    tooling = tooling_for(config, StubTools(SystemClock()))(InMemoryBlobStore(10))
+    spec = run_spec(config, tooling)
+    assert spec.wall == {"adapter": "fake"}
+    assert spec.config_id == config_id(
+        config.model,
+        config.prices,
+        config.run,
+        tooling.tools.list_tools(),
+        dataclasses.asdict(config.tools),
+        {"adapter": "fake"},
+    )
+    moved = dataclasses.replace(
+        config, tools=dataclasses.replace(config.tools, work_dir="/made-up/moved")
+    )
+    assert run_spec(moved, tooling).config_id != spec.config_id
+
+
+def test_main_builds_the_seven_built_in_tools_behind_the_wall(tmp_path: Path) -> None:
+    config = config_in(tmp_path)
+    Path(config.tools.work_dir).mkdir()
+    built = builtin_tooling(config, SystemClock())(InMemoryBlobStore(10))
+    assert [entry.spec.name for entry in built.tools.list_tools()] == [
+        "edit_file",
+        "read_file",
+        "read_output",
+        "search_files",
+        "shell",
+        "web_fetch",
+        "write_file",
+    ]
+    assert built.executor.wall()["adapter"] == "seatbelt"

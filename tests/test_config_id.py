@@ -1,9 +1,9 @@
-"""The config id: one hash over the model, prices, run settings and tools."""
+"""The config id: one hash over the model, prices, run, tools, their settings, wall."""
 
 import dataclasses
 
 from lamplighter.core import Prices, RunSettings, config_id
-from lamplighter.ports import ModelProfile, ToolSpec
+from lamplighter.ports import JsonObject, ModelProfile, ToolEntry, ToolSpec
 
 MODEL = ModelProfile(
     adapter="anthropic",
@@ -35,32 +35,64 @@ WAIT = ToolSpec(
         "properties": {"seconds": {"type": "number", "maximum": 0.5}},
     },
 )
-# Worked out once from the saved JSON text of the four, checked by running
-# sha256sum on that text, and pinned here, so a
-# change to how the id is made shows up as a change to this value.
-PINNED = "fd314cad16b1bf6079687bdfd43d81d545d783be4447158674a4e8e7c58f5787"
+ENTRY = ToolEntry(spec=WAIT, action_class="read", output_cap=30_000, taints=False)
+TOOL_SETTINGS: JsonObject = {
+    "work_dir": "/made-up/work",
+    "scratch_dir": "/made-up/scratch",
+    "shell_path": "/usr/bin:/bin",
+    "shell_default_seconds": 120,
+    "shell_max_seconds": 600,
+    "output_cap_chars": 30_000,
+    "fetch_max_bytes": 5_242_880,
+    "fetch_seconds": 30,
+}
+WALL: JsonObject = {"adapter": "seatbelt", "profile_sha256": "a" * 64}
+# Worked out once from the saved JSON text of the six, checked by running
+# sha256sum on that text, and pinned here, so a change to how the id is
+# made shows up as a change to this value.
+PINNED = "4f06cb3ccacebcf2374bf501d738ce6a1c2ad95b9e5126b499b8df1c29a3d839"
+
+
+def made(
+    model: ModelProfile = MODEL,
+    prices: Prices = PRICES,
+    run: RunSettings = RUN,
+    tools: tuple[ToolEntry, ...] = (ENTRY,),
+    tool_settings: JsonObject = TOOL_SETTINGS,
+    wall: JsonObject = WALL,
+) -> str:
+    return config_id(model, prices, run, tools, tool_settings, wall)
 
 
 def test_the_id_of_known_settings_is_the_pinned_value() -> None:
-    assert config_id(MODEL, PRICES, RUN, (WAIT,)) == PINNED
+    assert made() == PINNED
 
 
-def test_a_change_to_any_of_the_four_gives_another_id() -> None:
-    first = config_id(MODEL, PRICES, RUN, (WAIT,))
+def test_a_change_to_any_of_the_six_gives_another_id() -> None:
     changed = [
-        config_id(dataclasses.replace(MODEL, max_output=2_001), PRICES, RUN, (WAIT,)),
-        config_id(MODEL, dataclasses.replace(PRICES, output=2), RUN, (WAIT,)),
-        config_id(MODEL, PRICES, dataclasses.replace(RUN, max_steps=41), (WAIT,)),
-        config_id(MODEL, PRICES, dataclasses.replace(RUN, system="Hi."), (WAIT,)),
-        config_id(MODEL, PRICES, RUN, ()),
-        config_id(MODEL, PRICES, RUN, (dataclasses.replace(WAIT, name="pause"),)),
+        made(model=dataclasses.replace(MODEL, max_output=2_001)),
+        made(prices=dataclasses.replace(PRICES, output=2)),
+        made(run=dataclasses.replace(RUN, max_steps=41)),
+        made(run=dataclasses.replace(RUN, system="Hi.")),
+        made(tools=()),
+        made(
+            tools=(
+                dataclasses.replace(
+                    ENTRY, spec=dataclasses.replace(WAIT, name="pause")
+                ),
+            )
+        ),
+        made(tools=(dataclasses.replace(ENTRY, action_class="irreversible"),)),
+        made(tools=(dataclasses.replace(ENTRY, output_cap=26_000),)),
+        made(tools=(dataclasses.replace(ENTRY, taints=True),)),
+        made(tool_settings={**TOOL_SETTINGS, "work_dir": "/made-up/moved"}),
+        made(wall={**WALL, "os_version": "26.5.1"}),
+        made(wall={**WALL, "profile_sha256": "b" * 64}),
     ]
-    assert first not in changed
+    assert made() not in changed
     assert len(set(changed)) == len(changed)
 
 
 def test_the_same_settings_always_give_the_same_id() -> None:
     again = RunSettings(**dataclasses.asdict(RUN))
-    assert config_id(MODEL, PRICES, RUN, [WAIT]) == config_id(
-        MODEL, PRICES, again, (WAIT,)
-    )
+    assert made(run=again) == made()

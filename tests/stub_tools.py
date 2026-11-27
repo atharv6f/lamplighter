@@ -1,4 +1,4 @@
-"""Two small tools that only read, so the loop has something real to call."""
+"""Two small tools that only read, so a test of the loop has something real to call."""
 
 from lamplighter.ports import (
     Clock,

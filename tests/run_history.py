@@ -2,7 +2,6 @@
 
 from typing import Any, cast
 
-from lamplighter.adapters import StubTools
 from lamplighter.core import Prices, Reply
 from lamplighter.core.run_spec import RunSpec
 from lamplighter.ports import (
@@ -26,10 +25,12 @@ from lamplighter.ports import (
     to_plain,
 )
 from tests.fake_clock import FakeClock
+from tests.stub_tools import StubTools
 
 AT = "2026-11-26T07:35:12.345Z"
 SESSION = "sess-a"
 CONFIG = "c" * 64
+WALL = {"adapter": "fake"}
 PRICES = Prices(
     input_uncached=4_000_000,
     cache_read=200_000,
@@ -48,6 +49,7 @@ SPEC = RunSpec(
     model_retries=2,
     cancel_bound_ms=800,
     prices=PRICES,
+    wall=WALL,
 )
 TOOLS: dict[str, ToolEntry] = {
     entry.spec.name: entry for entry in StubTools(FakeClock()).list_tools()

@@ -8,7 +8,6 @@ from lamplighter.adapters import (
     ScriptedReply,
     ScriptedTool,
     ScriptedTools,
-    StubTools,
 )
 from lamplighter.adapters.in_memory import (
     InMemoryBlobStore,
@@ -36,6 +35,7 @@ from lamplighter.ports import (
 )
 from tests.model_by_request import Choose
 from tests.run_history import SESSION, stop
+from tests.stub_tools import StubTools
 from tests.waiting_clock import JumpingClock
 
 MAX_RECORD_BYTES = 200_000

@@ -1,6 +1,7 @@
 """The chat command: talk to one session in the terminal."""
 
 import asyncio
+import dataclasses
 import os
 import signal
 from collections.abc import Callable
@@ -13,6 +14,7 @@ from lamplighter.app.config import Config
 from lamplighter.app.ctrl_c import CtrlC
 from lamplighter.app.progress import progress_lines
 from lamplighter.app.single_instance import lock_store
+from lamplighter.app.tool_folders import make_tool_folders
 from lamplighter.core import (
     Deps,
     RunningSessions,
@@ -27,8 +29,10 @@ from lamplighter.core import (
 from lamplighter.ports import (
     BlobStore,
     Clock,
+    Command,
     EffectLedger,
     EventLog,
+    Executor,
     Failure,
     IdSource,
     Inbox,
@@ -40,8 +44,12 @@ from lamplighter.ports import (
 
 LOCK_HELD = "Another lamplighter process is using this store."
 UNSETTLED = (
-    "The store holds an action whose outcome is not known."
-    " This version cannot settle it, so it will not start."
+    "{n} actions have an outcome that is not known."
+    " List them with: lamplighter store sessions"
+)
+NO_WALL = (
+    "The sandbox is not available: {message} Commands and searches will fail."
+    " File tools and web_fetch still work."
 )
 WAITING = (
     "Session {id} has unfinished work."
@@ -49,7 +57,9 @@ WAITING = (
 )
 LEAVING = "Exiting now. The next start carries on from what is saved."
 LEAVE_CODE = 130
-_SOURCE = "app/chat"
+# The command that brings on the wall's self-test before the first message.
+_FIRST_COMMAND = ("/usr/bin/true",)
+_FIRST_COMMAND_MS = 5_000
 
 
 @dataclass(frozen=True)
@@ -65,16 +75,25 @@ class Stores:
 
 
 @dataclass(frozen=True)
+class Tooling:
+    """The tools, and the executor that runs their commands behind the wall."""
+
+    tools: ToolProvider
+    executor: Executor
+
+
+@dataclass(frozen=True)
 class ChatParts:
     """What a chat is built from beside the settings. A test gives its own.
 
-    The store and the terminal are given as functions, because the store
-    is opened only once the folder is locked, and the terminal is made
-    only once the session id is known.
+    The store, the tools and the terminal are given as functions, because
+    the store is opened only once the folder is locked, the tools are made
+    only once their folders are, with the store's blobs, and the terminal is
+    made only once the session id is known.
     """
 
     model: ModelClient
-    tools: ToolProvider
+    tooling: Callable[[BlobStore], Tooling]
     clock: Clock
     ids: IdSource
     open_stores: Callable[[Path], Stores | Failure]
@@ -111,30 +130,44 @@ def _open_and_serve(
     if isinstance(stores, Failure):
         return _refused(stores.message, parts)
     try:
-        return asyncio.run(_serve(config, stores, session_id, parts))
+        refused = make_tool_folders(config.tools)
+        if refused is not None:
+            return _refused(refused, parts)
+        tooling = parts.tooling(stores.blobs)
+        return asyncio.run(_serve(config, stores, tooling, session_id, parts))
     finally:
         stores.close()
 
 
 async def _serve(
-    config: Config, stores: Stores, session_id: str | None, parts: ChatParts
+    config: Config,
+    stores: Stores,
+    tooling: Tooling,
+    session_id: str | None,
+    parts: ChatParts,
 ) -> int:
-    others = await _waiting_elsewhere(stores, session_id)
-    if isinstance(others, Failure):
-        return _refused(others.message, parts)
+    waiting = await _waiting_elsewhere(stores, session_id)
+    if isinstance(waiting, Failure):
+        return _refused(waiting.message, parts)
+    unsettled, others = waiting
     if session_id is None:
         session_id = parts.ids.new_id()
         parts.writer.write(f"Session {session_id}\n")
     terminal = parts.terminal(session_id)
+    if unsettled:
+        terminal.show_line(UNSETTLED.format(n=unsettled))
     for other in others:
         terminal.show_line(WAITING.format(id=other))
+    no_wall = await _wall_is_down(config, tooling.executor)
+    if no_wall is not None:
+        terminal.show_line(NO_WALL.format(message=no_wall.message))
     running = RunningSessions()
     deps = Deps(
         log=stores.log,
         inbox=stores.inbox,
         outbox=stores.outbox,
         model=parts.model,
-        tools=parts.tools,
+        tools=tooling.tools,
         ledger=stores.ledger,
         blobs=stores.blobs,
         clock=parts.clock,
@@ -142,7 +175,7 @@ async def _serve(
         observers=progress_lines(terminal.show_line),
         running=running,
     )
-    failed = await _talk(session_id, run_spec(config, parts.tools), deps, terminal)
+    failed = await _talk(session_id, run_spec(config, tooling), deps, terminal)
     return 0 if failed is None else _refused(failed.message, parts)
 
 
@@ -195,20 +228,20 @@ def leave_now(terminal: TerminalChannel) -> NoReturn:
 
 async def _waiting_elsewhere(
     stores: Stores, session_id: str | None
-) -> list[str] | Failure:
-    """Give the other sessions with work waiting, or why the start must stop.
+) -> tuple[int, list[str]] | Failure:
+    """Give the count of unsettled actions and the other sessions with work.
 
     Work waits in a run that has not ended, a message not yet routed, or a
-    reply not yet sent. An action whose outcome is not known stops the
-    start, because this version cannot settle one.
+    reply not yet sent. An action whose outcome is not known no longer
+    stops the start: the loop settles its own session's in its first
+    passes, and the count tells the person about the rest.
     """
     work = await unfinished_work(stores.log, stores.ledger)
     if isinstance(work, Failure):
         return work
-    if work.other_effects or any(open_.effects for open_ in work.sessions):
-        return Failure(
-            kind="needs_user", effect="none", message=UNSETTLED, source=_SOURCE
-        )
+    unsettled = len(work.other_effects) + sum(
+        len(open_.effects) for open_ in work.sessions
+    )
     pending = await stores.inbox.pending()
     if isinstance(pending, Failure):
         return pending
@@ -220,18 +253,37 @@ async def _waiting_elsewhere(
         | {row.inbound.conversation for row in pending}
         | {out.session_id for out in due}
     )
-    return sorted(waiting - {session_id})
+    return unsettled, sorted(waiting - {session_id})
 
 
-def run_spec(config: Config, tools: ToolProvider) -> RunSpec:
+async def _wall_is_down(config: Config, executor: Executor) -> Failure | None:
+    """Run one command, which brings on the wall's self-test, and say if it failed."""
+    first = Command(
+        argv=_FIRST_COMMAND,
+        cwd=config.tools.work_dir,
+        env={},
+        profile="read_only",
+        wall_ms=_FIRST_COMMAND_MS,
+        capture_bytes=1_000,
+    )
+    ran = await executor.run(first)
+    if isinstance(ran, Failure) and ran.kind == "unavailable":
+        return ran
+    return None
+
+
+def run_spec(config: Config, tooling: Tooling) -> RunSpec:
     """Build the spec every run of this process keeps, with its config id."""
     run = config.run
+    wall = tooling.executor.wall()
     return RunSpec(
         config_id=config_id(
             config.model,
             config.prices,
             run,
-            tuple(entry.spec for entry in tools.list_tools()),
+            tooling.tools.list_tools(),
+            dataclasses.asdict(config.tools),
+            wall,
         ),
         system=run.system,
         max_steps=run.max_steps,
@@ -243,6 +295,7 @@ def run_spec(config: Config, tools: ToolProvider) -> RunSpec:
         model_retries=run.model_retries,
         cancel_bound_ms=run.cancel_bound_ms,
         prices=config.prices,
+        wall=wall,
     )
 
 

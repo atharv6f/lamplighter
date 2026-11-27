@@ -5,7 +5,7 @@ import asyncio
 import os
 import sqlite3
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TextIO
 
@@ -13,12 +13,13 @@ import httpx
 
 from lamplighter.adapters import (
     FileBlobStore,
-    StubTools,
     SystemClock,
     SystemIds,
     TerminalChannel,
 )
 from lamplighter.adapters.anthropic import AnthropicModel
+from lamplighter.adapters.builtin_tools import BuiltinTools, system_web
+from lamplighter.adapters.seatbelt import SeatbeltExecutor
 from lamplighter.adapters.sqlite import (
     SqliteEffectLedger,
     SqliteEventLog,
@@ -30,9 +31,9 @@ from lamplighter.adapters.sqlite import (
     open_database,
     store_sizes,
 )
-from lamplighter.app.chat import ChatParts, Stores, chat
+from lamplighter.app.chat import ChatParts, Stores, Tooling, chat
 from lamplighter.app.config import Config, load_config
-from lamplighter.ports import Clock, Failure, ModelClient, ToolProvider
+from lamplighter.ports import BlobStore, Clock, Failure, ModelClient
 
 NO_KEY = "ANTHROPIC_API_KEY is not set."
 # How long a write waits for another process that holds the store's lock.
@@ -95,15 +96,31 @@ def _chat(config: Config, session_id: str | None) -> int:
         print(NO_KEY, file=sys.stderr)
         return 1
     model = build_model(config, key)
-    tools = StubTools(SystemClock())
-    parts = chat_parts(config, model, tools, sys.stdin.fileno(), sys.stdout, sys.stderr)
+    tooling = builtin_tooling(config, SystemClock())
+    parts = chat_parts(
+        config, model, tooling, sys.stdin.fileno(), sys.stdout, sys.stderr
+    )
     return chat(config, session_id, parts)
+
+
+def builtin_tooling(config: Config, clock: Clock) -> Callable[[BlobStore], Tooling]:
+    """Build the built-in tools behind the wall, once their folders are made."""
+
+    def build(blobs: BlobStore) -> Tooling:
+        tools = config.tools
+        executor = SeatbeltExecutor(
+            tools.work_dir, tools.scratch_dir, config.store.dir, clock
+        )
+        built = BuiltinTools(tools, blobs, executor, clock, system_web())
+        return Tooling(built, executor)
+
+    return build
 
 
 def chat_parts(
     config: Config,
     model: ModelClient,
-    tools: ToolProvider,
+    tooling: Callable[[BlobStore], Tooling],
     reader: int,
     writer: TextIO,
     errors: TextIO,
@@ -118,7 +135,7 @@ def chat_parts(
     def terminal(session_id: str) -> TerminalChannel:
         return TerminalChannel(session_id, clock, ids, reader, writer)
 
-    return ChatParts(model, tools, clock, ids, open_stores, terminal, writer, errors)
+    return ChatParts(model, tooling, clock, ids, open_stores, terminal, writer, errors)
 
 
 def sqlite_stores(folder: Path, config: Config, clock: Clock) -> Stores | Failure:
