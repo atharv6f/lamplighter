@@ -64,9 +64,12 @@ async def call_model(
     deadline_ms = min(spec.model_deadline_ms, time_left_ms(view, spec))
     # The request and its reply carry the step the request begins.
     asked = replace(view, step=view.step + 1)
-    request_event = in_run(
-        asked, utc_text(deps.clock.now()), MODEL_REQUEST, {"deadline_ms": deadline_ms}
-    )
+    asking: JsonObject = {
+        "deadline_ms": deadline_ms,
+        "model": spec.model,
+        "provider": spec.provider,
+    }
+    request_event = in_run(asked, utc_text(deps.clock.now()), MODEL_REQUEST, asking)
     request_seq = await deps.log.append(session_id, (request_event,), view.last_seq)
     if isinstance(request_seq, Failure):
         return request_seq

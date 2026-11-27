@@ -108,13 +108,14 @@ def shape(event: Event) -> tuple[object, ...]:
 RUN = "id-0001"
 MESSAGE_ID = inbound_event_id("terminal", "n1")
 UNKNOWN_TEXT = "There is no tool named weather. The tools are: current_time, wait."
+ASKED = {"deadline_ms": 600_000, "model": "made-up-1", "provider": "made-up"}
 EXPECTED: list[tuple[object, ...]] = [
     (1, "session_started", {"channel": "terminal", "conversation": SESSION},
      None, None, None, None, FIRST_AT),
     (2, "run_started", {"config_id": CONFIG, "trigger": "message", "wall": WALL},
      RUN, None, MESSAGE_ID, None, FIRST_AT),
     (3, "user_message", {"text": QUESTION}, RUN, None, None, None, FIRST_AT),
-    (4, "model_request", {"deadline_ms": 600_000}, RUN, 1, None, None, FIRST_AT),
+    (4, "model_request", ASKED, RUN, 1, None, None, FIRST_AT),
     (5, "model_response",
      reply_payload(CURRENT_TIME, WAIT, reason="tool_calls"),
      RUN, 1, eid(4), 0, FIRST_AT),
@@ -129,14 +130,14 @@ EXPECTED: list[tuple[object, ...]] = [
     (9, "tool_result",
      {"call_id": "call_2", "text": "Waited 2 seconds.", "is_error": False},
      RUN, 1, eid(8), 2_000, AFTER_WAIT),
-    (10, "model_request", {"deadline_ms": 600_000}, RUN, 2, None, None, AFTER_WAIT),
+    (10, "model_request", ASKED, RUN, 2, None, None, AFTER_WAIT),
     (11, "model_response", reply_payload(WEATHER, reason="tool_calls"),
      RUN, 2, eid(10), 0, AFTER_WAIT),
     (12, "tool_result",
      {"call_id": "call_3", "text": UNKNOWN_TEXT, "is_error": True,
       "harness": "unknown_tool"},
      RUN, 2, eid(11), None, AFTER_WAIT),
-    (13, "model_request", {"deadline_ms": 600_000}, RUN, 3, None, None, AFTER_WAIT),
+    (13, "model_request", ASKED, RUN, 3, None, None, AFTER_WAIT),
     (14, "model_response", reply_payload(TextPart(text=ANSWER), reason="end"),
      RUN, 3, eid(13), 0, AFTER_WAIT),
     (15, "reply_ready",
@@ -530,6 +531,7 @@ def test_a_tool_that_fails_gives_the_model_an_error_result() -> None:
                 "call_id": "call_2",
                 "text": "wait failed (unavailable): The timer is not there.",
                 "is_error": True,
+                "failure_kind": "unavailable",
             }
         ]
 

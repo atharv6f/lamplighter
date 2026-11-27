@@ -39,6 +39,8 @@ PRICES = Prices(
 )
 SPEC = RunSpec(
     config_id=CONFIG,
+    model="made-up-1",
+    provider="made-up",
     system="You are a made-up helper.",
     max_steps=40,
     max_seconds=1_200,

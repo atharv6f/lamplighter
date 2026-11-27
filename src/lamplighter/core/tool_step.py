@@ -147,7 +147,9 @@ async def tool_payload(
     A text over the cap is saved whole as a blob before the event that
     points at it. A failed save does not end the pass: the tool has run,
     so its result is written all the same, with a note that the rest is
-    gone. Outside text is wrapped as one JSON object after the cut.
+    gone. Outside text is wrapped as one JSON object after the cut. A
+    `Failure` saves its kind as `failure_kind`, and this is the one place
+    that writes the field.
     """
     name = call.call.name
     if isinstance(outcome, Failure):
@@ -156,6 +158,10 @@ async def tool_payload(
     else:
         text, is_error = outcome.text, outcome.is_error
     payload: dict[str, JsonValue] = {"call_id": call.call.id, "is_error": is_error}
+    if isinstance(outcome, Failure):
+        # The kind is saved as a word of its own, so a reader never has to
+        # find it inside the sentence for the model.
+        payload["failure_kind"] = outcome.kind
     shown, note = text, None
     cut = fit(text, entry.output_cap)
     if cut is not None:

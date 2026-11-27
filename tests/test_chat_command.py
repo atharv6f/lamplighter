@@ -485,6 +485,16 @@ def test_the_run_spec_carries_the_wall_and_its_id_covers_all_six(
     assert run_spec(moved, tooling).config_id != spec.config_id
 
 
+def test_the_run_spec_names_the_model_and_the_adapter_from_the_settings(
+    tmp_path: Path,
+) -> None:
+    config = config_in(tmp_path)
+    tooling = tooling_for(config, StubTools(SystemClock()))(InMemoryBlobStore(10))
+    spec = run_spec(config, tooling)
+    assert (spec.model, spec.provider) == (config.model.model, config.model.adapter)
+    assert (spec.model, spec.provider) == ("made-up-1", "scripted")
+
+
 def test_main_builds_the_seven_built_in_tools_behind_the_wall(tmp_path: Path) -> None:
     config = config_in(tmp_path)
     Path(config.tools.work_dir).mkdir()

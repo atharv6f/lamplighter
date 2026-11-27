@@ -36,10 +36,14 @@ class RunSpec:
     millionths of a dollar. `model_deadline_ms` bounds one model call with
     its retries, and `cancel_bound_ms` is how long a call that is being cut
     short gets to stop. `wall` is the executor's record of its wall, saved
-    on `run_started` too, because the hash cannot be read back.
+    on `run_started` too, because the hash cannot be read back. `model` and
+    `provider` are the names from the model settings, saved on each model
+    request, so a call that gets no reply still says which model was asked.
     """
 
     config_id: str
+    model: str
+    provider: str
     system: str
     max_steps: int
     max_seconds: int

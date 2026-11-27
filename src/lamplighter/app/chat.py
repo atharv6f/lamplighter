@@ -330,6 +330,8 @@ def run_spec(config: Config, tooling: Tooling) -> RunSpec:
             dataclasses.asdict(config.tools),
             wall,
         ),
+        model=config.model.model,
+        provider=config.model.adapter,
         system=run.system,
         max_steps=run.max_steps,
         max_seconds=run.max_seconds,

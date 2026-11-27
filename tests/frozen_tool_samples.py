@@ -1,11 +1,13 @@
-"""The rows of the frozen store of tool calls: every event as the loop now writes it.
+"""The rows of the frozen stores of tool calls: every event as the loop writes it.
 
-The text file tests/stores/version_2_tools.sql was made once, by running
-these chats through the loop on the SQLite adapters and dumping the file
-as SQL. Neither the text file nor this one is edited after that. The test
-that reads the text file compares it with what the in-memory stores hold
-after the same chats, so a change that reads old data differently fails
-it. The chats leave an effect row in each state the ledger can reach.
+The text files tests/stores/version_2_tools.sql and
+tests/stores/version_2_tools_with_model.sql were each made once, by running
+these chats through the loop of their day on the SQLite adapters and
+dumping the file as SQL. The text files are never edited, and these chats
+are not changed. The test compares the newer file with what the in-memory
+stores hold after the same chats, so a change that reads old data
+differently fails it. The chats leave an effect row in each state the
+ledger can reach.
 """
 
 from collections.abc import Awaitable, Callable
