@@ -162,17 +162,6 @@ def test_a_real_folder_in_the_home_folder_cannot_be_listed(place: Place) -> None
     assert exit_code_only(place, f'/bin/ls "{library}"') != 0
 
 
-def test_a_command_cannot_tell_a_home_folder_from_a_missing_one(
-    place: Place,
-) -> None:
-    # A rule that let a command read any folder's details would make the
-    # first answer 0, and tell it which folders a home folder holds.
-    there = exit_code_only(place, f'test -d "{place.beside}"')
-    missing = exit_code_only(place, f'test -d "{place.beside}-missing"')
-    assert place.beside.is_dir()
-    assert there == missing == 1
-
-
 def test_a_grandchild_cannot_write_outside(place: Place) -> None:
     target = place.beside / "grandchild"
     place.shell(f'(/bin/sh -c "/usr/bin/touch {target}") & wait')
@@ -344,6 +333,18 @@ def test_with_the_home_deny_removed_the_decoy_read_gets_through(
     monkeypatch.setitem(PROFILES, "workspace_write", profile.replace(HOME_DENY, ""))
     ended = place.run("/bin/cat", str(place.beside / "secret.txt"))
     assert ended.output == DECOY.encode()
+
+
+def test_with_the_rule_for_folder_details_removed_git_stops(
+    place: Place, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Why the rule stays: git looks at every folder above the work folder.
+    rule = "(allow file-read-metadata (vnode-type DIRECTORY))\n"
+    profile = PROFILES["workspace_write"]
+    assert rule in profile
+    monkeypatch.setitem(PROFILES, "workspace_write", profile.replace(rule, ""))
+    ended = place.shell("git init -q repo && cd repo && git status --short")
+    assert ended.exit_code != 0
 
 
 def _running(name: str) -> set[int]:
