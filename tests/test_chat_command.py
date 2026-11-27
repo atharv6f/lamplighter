@@ -22,6 +22,8 @@ import pytest
 
 from lamplighter.adapters import (
     ScriptedReply,
+    ScriptedTool,
+    ScriptedTools,
     SystemClock,
 )
 from lamplighter.adapters.in_memory import InMemoryBlobStore
@@ -53,12 +55,15 @@ from lamplighter.ports import (
     ExecResult,
     Failure,
     Inbox,
+    JsonObject,
     ModelRequest,
     NewEvent,
     Outbound,
     Outbox,
     TextPart,
     ToolCallPart,
+    ToolResult,
+    ToolSpec,
     Usage,
     out_id_for,
 )
@@ -522,3 +527,34 @@ def test_the_chat_starts_on_the_real_tools_before_their_folders_exist(
         assert "The sandbox is not available: The wall needs macOS" in (
             screen.getvalue()
         )
+
+
+def test_a_tool_whose_schema_the_check_cannot_read_stops_the_start(
+    tmp_path: Path,
+) -> None:
+    async def run(arguments: JsonObject) -> ToolResult:
+        del arguments
+        return ToolResult("Listed.", False, "none")
+
+    schema: JsonObject = {
+        "type": "object",
+        "properties": {"names": {"type": "string", "items": {"type": "string"}}},
+    }
+    tools = ScriptedTools([ScriptedTool(ToolSpec("listed", "Made up.", schema), run)])
+    config = config_in(tmp_path)
+    keyboard = typed(b"Hello.\n")
+    screen = Screen()
+    try:
+        parts = chat_parts(
+            config,
+            ModelByRequest(answers),
+            tooling_for(config, tools),
+            keyboard.reader,
+            screen,
+            io.StringIO(),
+        )
+        with pytest.raises(ValueError, match="the schema of listed: names.items$"):
+            chat(config, None, parts)
+    finally:
+        keyboard.done()
+    assert "Hello" not in screen.getvalue()

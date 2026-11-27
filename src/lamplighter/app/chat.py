@@ -25,6 +25,7 @@ from lamplighter.core import (
     run_intake,
     take,
     unfinished_work,
+    unsupported,
 )
 from lamplighter.ports import (
     BlobStore,
@@ -136,6 +137,7 @@ def _open_and_serve(
         if refused is not None:
             return _refused(refused, parts)
         tooling = parts.tooling(stores.blobs)
+        check_schemas(tooling.tools)
         return asyncio.run(_serve(config, stores, tooling, session_id, parts))
     finally:
         stores.close()
@@ -297,6 +299,22 @@ async def _wall_is_down(config: Config, executor: Executor) -> Failure | None:
     if isinstance(ran, Failure) and ran.kind == "unavailable":
         return ran
     return None
+
+
+def check_schemas(tools: ToolProvider) -> None:
+    """Raise ValueError if a tool's schema has a part the argument check cannot read.
+
+    The tools are this repo's own code, so such a schema is a bug, and the
+    chat does not start with a check that would pass what it never read.
+    """
+    for entry in tools.list_tools():
+        found = unsupported(entry.spec.arguments_schema)
+        if found:
+            named = ", ".join(found)
+            raise ValueError(
+                f"the argument check cannot read the schema of {entry.spec.name}:"
+                f" {named}"
+            )
 
 
 def run_spec(config: Config, tooling: Tooling) -> RunSpec:
