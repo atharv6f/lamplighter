@@ -3,6 +3,7 @@
 import asyncio
 import os
 import platform
+import stat
 import sys
 from pathlib import Path
 
@@ -20,7 +21,7 @@ from lamplighter.ports import (
 
 SANDBOX_EXEC = "/usr/bin/sandbox-exec"
 _SOURCE = "Executor/seatbelt"
-_TEST_MS = 5_000
+SELF_TEST_MS = 5_000
 _TEST_CAPTURE = 65_536
 _DETAIL_BYTES = 500
 
@@ -101,11 +102,18 @@ class SeatbeltExecutor:
         name = f".lamplighter-wall-test-{os.getpid()}"
         allowed = Path(self._scratch, "tmp", name)
         denied = Path(self._state, name)
+        # A command may write in the scratch folder, so it may have left
+        # something at the test's name.
+        if not _cleared(allowed):
+            return _unavailable(
+                f"The wall's self-test could not run: {allowed} is in the way."
+                " Remove it, then start again."
+            )
         wrote = await self._test_run("/usr/bin/touch", str(allowed))
         if isinstance(wrote, Failure):
             return wrote
         made = allowed.is_file()
-        allowed.unlink(missing_ok=True)
+        _cleared(allowed)
         if wrote.exit_code != 0 or not made:
             return _failed_test(f"a write to {allowed.parent} was refused", wrote)
         into_state = await self._test_run("/usr/bin/touch", str(denied))
@@ -113,12 +121,13 @@ class SeatbeltExecutor:
             return into_state
         leaked = denied.exists()
         denied.unlink(missing_ok=True)
-        if into_state.exit_code == 0 or leaked:
+        # A command that did not end refused nothing.
+        if into_state.exit_code in (0, None) or leaked:
             return _failed_test(f"a write to {self._state} was not refused", into_state)
         listed = await self._test_run("/bin/ls", self._state)
         if isinstance(listed, Failure):
             return listed
-        if listed.exit_code == 0:
+        if listed.exit_code in (0, None):
             return _failed_test(f"a listing of {self._state} was not refused", listed)
         return None
 
@@ -127,7 +136,7 @@ class SeatbeltExecutor:
             [*self._prefix("workspace_write"), *argv],
             self._work,
             {},
-            _TEST_MS,
+            SELF_TEST_MS,
             _TEST_CAPTURE,
             self._clock,
             _tested_already,
@@ -135,6 +144,22 @@ class SeatbeltExecutor:
         if isinstance(ran, Failure):
             return _unavailable(f"The wall could not be started: {ran.message}")
         return ran
+
+
+def _cleared(path: Path) -> bool:
+    """Remove a file, a link or an empty folder at `path`, and say if none is left."""
+    try:
+        found = path.lstat()
+    except FileNotFoundError:
+        return True
+    try:
+        if stat.S_ISDIR(found.st_mode):
+            path.rmdir()
+        else:
+            path.unlink()
+    except OSError:
+        return False
+    return True
 
 
 async def _tested_already() -> Failure | None:

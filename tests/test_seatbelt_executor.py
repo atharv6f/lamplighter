@@ -25,10 +25,11 @@ from lamplighter.ports import Command, ExecResult, Failure
 # What the stand-in does: "faithful" refuses a command that names the store's
 # folder and runs any other, "open" runs every command, "closed" refuses
 # every one, "lists" is faithful but lets a listing through, "leaks" makes
-# the file it was asked to refuse and then says it refused, and "broken"
-# fails the way a profile with an error does.
+# the file it was asked to refuse and then says it refused, "stalls" never
+# ends a command that names the store, and "broken" fails the way a profile
+# with an error does.
 STAND_IN = """#!{python}
-import json, os, sys
+import json, os, sys, time
 here = os.path.dirname(os.path.abspath(__file__))
 args = sys.argv[1:]
 with open(os.path.join(here, "calls.jsonl"), "a") as calls:
@@ -45,6 +46,8 @@ if mode == "lists" and command[0] == "/bin/ls":
 named_state = any(part.startswith(params["STATE"]) for part in command)
 if mode == "leaks" and named_state and command[0] == "/usr/bin/touch":
     open(command[1], "w").close()
+if mode == "stalls" and named_state:
+    time.sleep(30)
 if mode == "closed" or (mode != "open" and named_state):
     sys.stderr.write("Operation not permitted\\n")
     sys.exit(1)
@@ -290,3 +293,49 @@ def test_the_profiles_are_pinned_and_differ_only_in_writing() -> None:
         assert lines[:2] == ["(version 1)", "(deny default)"]
         assert lines[-1] == '(deny file-read* file-write* (subpath (param "STATE")))'
         assert "network" not in text
+
+
+def test_a_wall_whose_store_command_never_ends_fails_its_self_test(
+    folders: Folders, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A command killed at its time limit refused nothing.
+    folders.mode("stalls")
+    monkeypatch.setattr(executor, "SELF_TEST_MS", 500)
+    failed = asyncio.run(folders.executor().run(command(folders.work, "/bin/true")))
+    assert isinstance(failed, Failure)
+    assert f"a write to {folders.state.resolve()} was not refused" in failed.message
+
+
+@pytest.mark.parametrize("left", ["file", "link", "empty folder"])
+def test_what_a_command_left_at_the_test_name_is_cleared_first(
+    folders: Folders, left: str
+) -> None:
+    name = folders.scratch / "tmp" / f".lamplighter-wall-test-{os.getpid()}"
+    if left == "file":
+        name.write_text("made-up")
+    elif left == "link":
+        name.symlink_to(folders.state)
+    else:
+        name.mkdir()
+    ran = asyncio.run(folders.executor().run(command(folders.work, "/bin/true")))
+    assert isinstance(ran, ExecResult) and ran.exit_code == 0, ran
+    assert list((folders.scratch / "tmp").iterdir()) == []
+    assert list(folders.state.iterdir()) == []
+
+
+def test_a_folder_with_files_at_the_test_name_stops_the_wall_and_raises_nothing(
+    folders: Folders,
+) -> None:
+    name = folders.scratch / "tmp" / f".lamplighter-wall-test-{os.getpid()}"
+    name.mkdir()
+    (name / "inside").write_text("made-up")
+    wall = folders.executor()
+    for _ in range(2):
+        failed = asyncio.run(wall.run(command(folders.work, "/bin/true")))
+        assert isinstance(failed, Failure)
+        assert (failed.kind, failed.effect) == ("unavailable", "none")
+        assert failed.message == (
+            f"The wall's self-test could not run: {name.resolve()} is in the way."
+            " Remove it, then start again."
+        )
+    assert folders.calls() == []
