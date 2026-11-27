@@ -73,7 +73,9 @@ uv run pytest -m crash -s
 
 On a slow drive, `LAMPLIGHTER_KILL_WAIT_MS=5,400` gives each run longer before its kill.
 
-The chat has its own kill tests. In one process, a chat is killed just before and just after each of its calls to a store, the model, a tool or the channel, then started again, for twelve chats. After every kill each run has ended, each tool call has one result, no tool ran twice, each message is in the log once, and each reply was shown once, in order. Under `-m crash` the restart is killed too, at each of its calls. A second test kills the real `lamplighter chat` process with `kill -9` at random moments: ten times in `make check`, two hundred under `-m crash`.
+The chat has its own kill tests. In one process, a chat is killed just before and just after each of its calls to a store, the model, a tool or the channel, then started again. Twelve chats only read, seventeen change a made-up world, and nine write, edit and run commands in a real folder with the built-in tools. After every kill each run has ended, each tool call has one result, no tool ran twice, each message is in the log once, and each reply was shown once, in order. No change happened twice, each action's row in the ledger says what really happened, and each file holds what the ledger says. Under `-m crash` the restart is killed too, at each of its calls.
+
+A second test kills the real `lamplighter chat` process with `kill -9` at random moments, once on stub tools and once on the built-in tools in a real folder: ten times each in `make check`, two hundred each under `-m crash`. On a Mac, `-m sandbox` also runs ten of them with every command behind the sandbox, and `-m "crash and sandbox"` runs two hundred. On another system, run the long ones with `-m "crash and not sandbox"`.
 
 `uv run python -m scripts.chat_timing` times the chat on this machine: Ctrl-C to the prompt, the rebuild of a long session's transcript, and the longest line the terminal passes on. It calls no model.
 
@@ -84,7 +86,7 @@ The chat has its own kill tests. In one process, a chat is killed just before an
 The tests of the sandbox need macOS, so `make check` leaves them out. Run them on a Mac:
 
 ```
-uv run pytest -m sandbox
+uv run pytest -m "sandbox and not crash"
 ```
 
 They try each known way out of the sandbox and check what must still work inside it. CI runs them on a macOS runner.

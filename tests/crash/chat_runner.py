@@ -1,9 +1,11 @@
 """Starts the real chat process, kills it with SIGKILL, and checks what it left.
 
-The child is `tests.chat_child` with the `kills` behaviour. It sends in
-the next group of messages at each start, so each group starts a run of
-its own. The parent kills it at random moments, starts it again, and
-goes on until a start finds every group sent and nothing left to do.
+The child is `tests.chat_child` with the `kills` behaviour, on the stub
+tools, or the `notes` behaviour, on the built-in tools in a real folder.
+It sends in the next group of messages at each start, so each group
+starts a run of its own. The parent kills it at random moments, starts it
+again, and goes on until a start finds every group sent and nothing left
+to do.
 """
 
 import asyncio
@@ -25,9 +27,18 @@ from lamplighter.adapters.sqlite import (
 )
 from lamplighter.adapters.system_clock import SystemClock
 from lamplighter.adapters.terminal import REPEAT_LINE
+from lamplighter.app.chat import UNSETTLED
 from lamplighter.ports import Failure
-from tests.chat_child import SEEDED_ALL, SESSION, STARTED, sent_in
+from tests.chat_child import (
+    SEEDED_ALL,
+    SESSION,
+    STARTED,
+    arrivals,
+    note_arrivals,
+    sent_in,
+)
 from tests.chat_kit import Outcome
+from tests.crash.folder_checks import folder_wrong
 from tests.kill_kit import broken_rules
 
 ROOT = Path(__file__).parents[2]
@@ -35,6 +46,8 @@ ROOT = Path(__file__).parents[2]
 # second to start, and up to two seconds for a group.
 KILL_AFTER_S = (0.2, 1.4)
 _PROGRESS = re.compile(r"\[(model call \d+|tool \w+)\]")
+# A command left unknown by a kill is counted at each start after it.
+_UNSETTLED = re.compile(re.escape(UNSETTLED).replace(re.escape("{n}"), r"\d+"))
 
 
 @dataclass(frozen=True)
@@ -48,19 +61,49 @@ class ChatKillRun:
 
 
 def run_chat_kills(folder: Path, kills: int, seed: int) -> ChatKillRun:
-    """Kill the chat `kills` times, then let it finish, and check the store.
+    """Kill the chat on the stub tools `kills` times, let it finish, check the store."""
+    store, screen = folder / "store", folder / "screen.txt"
+    killed, starts, groups = _kill_and_finish(store, screen, "kills", kills, seed)
+    return _checked(store, screen, sent_in(arrivals(groups)), killed, starts)
 
-    There is a group of messages for each kill and a few more, so the work
-    lasts long enough for every kill to land.
+
+def run_note_kills(folder: Path, kills: int, seed: int, behaviour: str) -> ChatKillRun:
+    """Kill the chat on the built-in tools, let it finish, check the store and folder.
+
+    `behaviour` is `notes`, whose commands run on the direct executor, or
+    `walled_notes`, whose commands run behind the wall.
+    """
+    store, screen = folder / "store", folder / "screen.txt"
+    outside = folder / "outside"
+    outside.mkdir()
+    (outside / "decoy.txt").write_text("made-up decoy text")
+    killed, starts, groups = _kill_and_finish(store, screen, behaviour, kills, seed)
+    run = _checked(store, screen, sent_in(note_arrivals(groups)), killed, starts)
+    wrong = folder_wrong(store, folder / "store-work", outside, groups)
+    assert wrong == [], wrong
+    return run
+
+
+def _kill_and_finish(
+    store: Path, screen: Path, behaviour: str, kills: int, seed: int
+) -> tuple[int, int, int]:
+    """Kill the child `kills` times, let it finish, and give the counts.
+
+    A start that ends before its kill sends in the next group. When every
+    group is sent before the last kill, more groups follow, so the work
+    lasts until every kill has landed, however fast the machine is.
     """
     chance = random.Random(seed)
     groups = kills + 4
-    store, screen = folder / "store", folder / "screen.txt"
     killed = starts = 0
     while True:
-        finishing = (store / SEEDED_ALL).exists()
+        seeded = store / SEEDED_ALL
+        if seeded.exists() and killed < kills:
+            seeded.unlink()
+            groups += kills - killed + 4
+        finishing = seeded.exists()
         starts += 1
-        child = _start(store, screen, groups)
+        child = _start(store, screen, behaviour, groups)
         try:
             limit = chance.uniform(*KILL_AFTER_S) if killed < kills else 60
             code = child.wait(timeout=limit)
@@ -72,12 +115,13 @@ def run_chat_kills(folder: Path, kills: int, seed: int) -> ChatKillRun:
             _kill(child)
         assert code == 0, _errors(child)
         if finishing:
-            break
-    return _checked(store, screen, groups, killed, starts)
+            return killed, starts, groups
 
 
-def _start(store: Path, screen: Path, groups: int) -> subprocess.Popen[bytes]:
-    command = ["-m", "tests.chat_child", str(store), "kills", SESSION, str(groups)]
+def _start(
+    store: Path, screen: Path, behaviour: str, groups: int
+) -> subprocess.Popen[bytes]:
+    command = ["-m", "tests.chat_child", str(store), behaviour, SESSION, str(groups)]
     with screen.open("ab") as shown:
         return subprocess.Popen(
             [sys.executable, *command],
@@ -102,7 +146,7 @@ def _errors(child: subprocess.Popen[bytes]) -> str:
 
 
 def _checked(
-    store: Path, screen: Path, groups: int, kills: int, starts: int
+    store: Path, screen: Path, messages: int, kills: int, starts: int
 ) -> ChatKillRun:
     connection = open_database(store / "state.db", 5.0)
     assert not isinstance(connection, Failure), connection
@@ -111,7 +155,7 @@ def _checked(
     finally:
         connection.close()
     started = _started(store / STARTED)
-    wrong = broken_rules(ended, started, sent_in(groups))
+    wrong = broken_rules(ended, started, messages)
     wrong += shown_in_order(ended, screen.read_text())
     assert wrong == [], wrong
     return ChatKillRun(kills, starts, len(ended.events), len(started))
@@ -167,7 +211,7 @@ def _texts(screen: str) -> list[str]:
     for line in screen.splitlines():
         while line.startswith("> "):
             line = line[2:]
-        if not line or _PROGRESS.fullmatch(line):
+        if not line or _PROGRESS.fullmatch(line) or _UNSETTLED.fullmatch(line):
             continue
         texts.append(
             line[1:-1] if line.startswith("[") and line.endswith("]") else line

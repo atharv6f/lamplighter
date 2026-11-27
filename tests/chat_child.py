@@ -2,11 +2,13 @@
 
     python -m tests.chat_child FOLDER BEHAVIOUR [SESSION [GROUPS]]
 
-It runs the real `chat` command on a real store in FOLDER, with the stub
-tools and a model that picks its reply from the request. BEHAVIOUR picks
-how the model and the tools act. Every tool start is written to the file
-`started.txt` in FOLDER, one line each, before the tool runs. A write
-reaches the operating system at once, so a kill does not lose it.
+It runs the real `chat` command on a real store in FOLDER, with a model
+that picks its reply from the request. BEHAVIOUR picks how the model acts
+and which tools it has: the stub tools, or the built-in tools on the work
+folder beside FOLDER, with commands on the direct executor or behind the
+wall. Every tool start is written to the file `started.txt` in FOLDER, one
+line each, before the tool runs. A write reaches the operating system at
+once, so a kill does not lose it.
 
 When its input is a terminal, the child makes that terminal its own, so a
 Ctrl-C typed there reaches it as a signal.
@@ -16,11 +18,14 @@ import asyncio
 import dataclasses
 import fcntl
 import os
+import re
 import sqlite3
 import sys
 import termios
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from lamplighter.adapters import (
     ScriptedReply,
@@ -28,11 +33,15 @@ from lamplighter.adapters import (
     ScriptedTools,
     SystemClock,
 )
+from lamplighter.adapters.builtin_tools import BuiltinTools
+from lamplighter.adapters.seatbelt import SeatbeltExecutor
 from lamplighter.adapters.sqlite import SqliteEventLog, SqliteInbox, open_database
-from lamplighter.app.chat import chat
+from lamplighter.app.chat import Tooling, chat
 from lamplighter.app.config import Config, load_config
 from lamplighter.app.main import chat_parts
 from lamplighter.ports import (
+    BlobStore,
+    Executor,
     Failure,
     Inbound,
     JsonObject,
@@ -46,6 +55,8 @@ from lamplighter.ports import (
     Usage,
     canonical_json,
 )
+from tests.builtin_kit import NO_WEB
+from tests.direct_executor import DirectExecutor
 from tests.kill_kit import Turn, answers, call, last_said
 from tests.model_by_request import Choose, ModelByRequest
 from tests.model_samples import PROFILE
@@ -89,7 +100,10 @@ _GROUPS: tuple[tuple[str, ...], ...] = (
 )
 
 
-def arrivals(groups: int) -> list[tuple[Inbound, ...]]:
+type Groups = list[tuple[Inbound, ...]]
+
+
+def arrivals(groups: int) -> Groups:
     """Give `groups` groups of messages, the four kinds in turn, each id new."""
     made: list[tuple[Inbound, ...]] = []
     for number in range(groups):
@@ -103,11 +117,19 @@ def arrivals(groups: int) -> list[tuple[Inbound, ...]]:
     return made
 
 
-def sent_in(groups: int) -> int:
+def note_arrivals(groups: int) -> Groups:
+    """Give `groups` groups that each ask for one note, every third with a stop."""
+    return [
+        (inbound(f"m{number}", f"Make note {number}."),)
+        if number % 3 != 2
+        else (inbound(f"m{number}", f"Make note {number}."), stop(f"s{number}"))
+        for number in range(groups)
+    ]
+
+
+def sent_in(made: Groups) -> int:
     """Give how many messages, not counting stops, the groups hold."""
-    return sum(
-        1 for group in arrivals(groups) for made in group if made.kind == "message"
-    )
+    return sum(1 for group in made for one in group if one.kind == "message")
 
 
 KILLED: dict[str, tuple[Turn, ...]] = {
@@ -122,6 +144,48 @@ KILLED: dict[str, tuple[Turn, ...]] = {
 }
 
 
+_NOTE = re.compile(r"Make note (\d+)\.")
+
+
+def note_name(number: int) -> str:
+    """The file that the note of this number goes in."""
+    return f"n{number}.txt"
+
+
+def note_line(number: int) -> str:
+    """The command that marks the note of this number as made."""
+    return f"sleep 0.5; echo {number} >> launches.txt"
+
+
+def _tool(call_id: str, name: str, **arguments: object) -> ToolCallPart:
+    return ToolCallPart(id=call_id, name=name, arguments=dict(arguments))  # type: ignore[arg-type]
+
+
+def make_notes(request: ModelRequest) -> Turn:
+    """Write the note, try a write outside, read it, edit it, run and search."""
+    said, after = last_said(request)
+    found = _NOTE.fullmatch(said)
+    assert found is not None, said
+    number = int(found.group(1))
+    name = note_name(number)
+    replies = (
+        _calls(
+            _tool("f1", "write_file", path=name, content=f"note {number}\n"),
+            _tool("f2", "write_file", path="../outside/decoy.txt", content="x"),
+        ),
+        _calls(
+            _tool("f3", "read_file", path=name),
+            _tool("f4", "edit_file", path=name, old_text="note", new_text="done"),
+        ),
+        _calls(
+            _tool("f5", "shell", command=note_line(number)),
+            _tool("f6", "search_files", pattern="done"),
+        ),
+        _text(f"Made note {number}."),
+    )
+    return replies[min(after, len(replies) - 1)]
+
+
 def said_length(request: ModelRequest) -> Turn:
     """Answer with the length of the person's latest text, in bytes."""
     said, _ = last_said(request)
@@ -134,20 +198,31 @@ class Behaviour:
 
     `stubborn` makes the wait tool ignore a cancel. Its run then gets a long
     cancel bound, so a second Ctrl-C has time to land before the run ends.
+    `groups` gives the messages a start sends in, for the kill tests.
+    `tools` picks the stub tools or the built-in ones, and where the
+    built-in tools run their commands.
     """
 
     choose: Choose
     model_seconds: float = 0.0
     stubborn: bool = False
     cancel_bound_ms: int = 800
+    groups: Callable[[int], Groups] | None = None
+    tools: Literal["stubs", "direct", "walled"] = "stubs"
 
 
 BEHAVIOURS = {
     "answers": Behaviour(answers(TYPED)),
     "slow_model": Behaviour(answers(TYPED), model_seconds=60.0),
     "stubborn": Behaviour(answers(TYPED), stubborn=True, cancel_bound_ms=10_000),
-    "kills": Behaviour(answers(KILLED), model_seconds=0.2),
+    "kills": Behaviour(answers(KILLED), model_seconds=0.2, groups=arrivals),
     "lengths": Behaviour(said_length),
+    "notes": Behaviour(
+        make_notes, model_seconds=0.15, groups=note_arrivals, tools="direct"
+    ),
+    "walled_notes": Behaviour(
+        make_notes, model_seconds=0.15, groups=note_arrivals, tools="walled"
+    ),
 }
 
 
@@ -179,7 +254,7 @@ def numbered(choose: Choose) -> Choose:
 
 
 class RecordedTools:
-    """Writes each tool start to a file, then runs it. Satisfies ToolProvider."""
+    """Writes each call and apply to a file as it starts. Satisfies ToolProvider."""
 
     def __init__(self, inner: ToolProvider, record: Path) -> None:
         self._inner = inner
@@ -189,12 +264,7 @@ class RecordedTools:
         return self._inner.list_tools()
 
     async def call(self, name: str, arguments: JsonObject) -> ToolResult | Failure:
-        line = f"{name}\t{canonical_json(arguments)}\n".encode()
-        held = os.open(self._record, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-        try:
-            os.write(held, line)
-        finally:
-            os.close(held)
+        self._note(name, arguments)
         return await self._inner.call(name, arguments)
 
     async def plan(
@@ -205,10 +275,19 @@ class RecordedTools:
     async def apply(
         self, name: str, arguments: JsonObject, plan: Plan
     ) -> ToolResult | Failure:
+        self._note(name, arguments)
         return await self._inner.apply(name, arguments, plan)
 
     async def check(self, probe: JsonObject) -> bool | None:
         return await self._inner.check(probe)
+
+    def _note(self, name: str, arguments: JsonObject) -> None:
+        line = f"{name}\t{canonical_json(arguments)}\n".encode()
+        held = os.open(self._record, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        try:
+            os.write(held, line)
+        finally:
+            os.close(held)
 
 
 def stubborn_tools() -> ScriptedTools:
@@ -237,7 +316,26 @@ def config_for(folder: Path, cancel_bound_ms: int) -> Config:
     )
 
 
-def send_next_group(folder: Path, groups: int) -> None:
+def builtin_tooling(
+    config: Config, walled: bool, record: Path
+) -> Callable[[BlobStore], Tooling]:
+    """Give the built-in tools on the work folder, with each start written down."""
+
+    def build(blobs: BlobStore) -> Tooling:
+        tools = config.tools
+        clock = SystemClock()
+        executor: Executor = (
+            SeatbeltExecutor(tools.work_dir, tools.scratch_dir, config.store.dir, clock)
+            if walled
+            else DirectExecutor(Path(tools.work_dir), clock)
+        )
+        made = BuiltinTools(tools, blobs, executor, clock, NO_WEB)
+        return Tooling(RecordedTools(made, record), executor)
+
+    return build
+
+
+def send_next_group(folder: Path, made: Groups) -> None:
     """Save the next group of messages, if nothing waits and no run is open.
 
     Once every group is saved, a file says so, and the test stops starting
@@ -246,13 +344,13 @@ def send_next_group(folder: Path, groups: int) -> None:
     connection = open_database(folder / "state.db", 5.0)
     assert not isinstance(connection, Failure), connection
     try:
-        asyncio.run(_send_next_group(folder, connection, groups))
+        asyncio.run(_send_next_group(folder, connection, made))
     finally:
         connection.close()
 
 
 async def _send_next_group(
-    folder: Path, connection: sqlite3.Connection, groups: int
+    folder: Path, connection: sqlite3.Connection, made: Groups
 ) -> None:
     log = SqliteEventLog(connection, {}, 200_000)
     inbox = SqliteInbox(connection, 200_000)
@@ -261,7 +359,7 @@ async def _send_next_group(
     assert not isinstance(pending, Failure) and not isinstance(unfinished, Failure)
     if pending or unfinished:
         return
-    for group in arrivals(groups):
+    for group in made:
         accepted = [await inbox.accept(made) for made in group]
         if any(not isinstance(a, Failure) and a.is_new for a in accepted):
             return
@@ -277,20 +375,28 @@ def main() -> int:
         fcntl.ioctl(0, termios.TIOCSCTTY, 0)
     acts = BEHAVIOURS[behaviour]
     folder.mkdir(mode=0o700, exist_ok=True)
-    if behaviour == "kills":
-        send_next_group(folder, groups)
+    if acts.groups is not None:
+        send_next_group(folder, acts.groups(groups))
     clock = SystemClock()
-    tools = stubborn_tools() if acts.stubborn else StubTools(clock)
     config = config_for(folder, acts.cancel_bound_ms)
     parts = chat_parts(
         config,
         ModelByRequest(numbered(acts.choose), clock, acts.model_seconds),
-        tooling_for(config, RecordedTools(tools, folder / STARTED)),
+        _tooling(config, acts, folder / STARTED),
         sys.stdin.fileno(),
         sys.stdout,
         sys.stderr,
     )
     return chat(config, session, parts)
+
+
+def _tooling(
+    config: Config, acts: Behaviour, record: Path
+) -> Callable[[BlobStore], Tooling]:
+    if acts.tools != "stubs":
+        return builtin_tooling(config, acts.tools == "walled", record)
+    stubs = stubborn_tools() if acts.stubborn else StubTools(SystemClock())
+    return tooling_for(config, RecordedTools(stubs, record))
 
 
 if __name__ == "__main__":
