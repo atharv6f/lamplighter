@@ -4,12 +4,14 @@ import asyncio
 import contextlib
 import os
 import signal
+import threading
 from datetime import datetime
 from pathlib import Path
 
 from lamplighter.adapters import SystemClock
 from lamplighter.adapters.command_run import run_command
 from lamplighter.ports import ExecResult, Failure
+from tests.contract.test_executor import is_alive
 from tests.fake_clock import START
 
 PATH = {"PATH": "/usr/bin:/bin"}
@@ -126,3 +128,46 @@ def test_a_command_that_a_limit_finds_dead_keeps_how_it_ended(tmp_path: Path) ->
     assert isinstance(result, ExecResult)
     assert (result.exit_code, result.signal) == (None, signal.SIGTERM)
     assert not result.timed_out and not result.cancelled
+
+
+class _LoopEnds(Exception):
+    """The test's own end of the loop, while a command still runs."""
+
+
+def test_a_loop_that_shuts_down_during_a_command_kills_it_and_ends(
+    tmp_path: Path,
+) -> None:
+    # The loop's shutdown cancels every task, the work's own as well as the
+    # caller's. A runner that waited on the work then would wait for ever.
+    pid = tmp_path / "pid"
+    line = f"echo $$ > {pid}; exec /bin/sleep 30"
+
+    async def scene() -> None:
+        asyncio.ensure_future(
+            run_command(
+                ("/bin/sh", "-c", line),
+                str(tmp_path),
+                PATH,
+                60_000,
+                1_000,
+                SystemClock(),
+                nothing_to_check,
+            )
+        )
+        while not (pid.is_file() and pid.read_text()):
+            await asyncio.sleep(0.01)
+        raise _LoopEnds
+
+    ended: list[str] = []
+
+    def shut_down() -> None:
+        with contextlib.suppress(_LoopEnds):
+            asyncio.run(scene())
+            return
+        ended.append("ended")
+
+    runner = threading.Thread(target=shut_down, daemon=True)
+    runner.start()
+    runner.join(timeout=10)
+    assert ended == ["ended"]
+    assert not is_alive(int(pid.read_text()))

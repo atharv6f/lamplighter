@@ -63,6 +63,10 @@ async def run_command(
     reaches it: the wall's self-test runs there. A `Failure` from it is
     given back and nothing is started. A cancel that came during it starts
     the command and kills it at once.
+
+    Only the event loop's shutdown cancels the work itself, because it
+    cancels every task. Then the group is killed, and the cancel goes on
+    to the caller, since no result will come.
     """
     stop = asyncio.Event()
     work = asyncio.ensure_future(
@@ -72,6 +76,8 @@ async def run_command(
         try:
             return await asyncio.shield(work)
         except asyncio.CancelledError:
+            if work.cancelled():
+                raise
             # If the work ended in the same turn as the cancel arrived, the
             # next wait gives its result at once, so the cancel is dropped.
             stop.set()
@@ -118,13 +124,19 @@ async def _work(
     full, ended = asyncio.Event(), asyncio.Event()
     os.set_blocking(read_end, False)
     loop.add_reader(read_end, _read, read_end, capture, full, ended)
+    killed = False
     try:
         exited = asyncio.ensure_future(process.wait())
         why = await _first_of(exited, full, wall_ms, clock, stop)
         _kill_group(process)
+        killed = True
         await exited
         await _until_set(ended, _DRAIN_S, clock)
     finally:
+        # A cancel of the work itself still kills the group. Once it is
+        # killed and reaped, its id may belong to another group.
+        if not killed:
+            _kill_group(process)
         loop.remove_reader(read_end)
         os.close(read_end)
     return _result(process.returncode, why, capture)
