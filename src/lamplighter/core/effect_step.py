@@ -146,10 +146,13 @@ async def settle_effect(
     if intent.action_class not in _CHANGE_CLASSES or not isinstance(target, str):
         raise ValueError("the intent of a change has a class and a target")
     action = action_for(session_id, call, intent.action_class, target)
-    # The key is already saved, so `begin` gives the row back and writes nothing.
+    # The row is saved before its intent, so `begin` gives it back and
+    # writes nothing. A new row means the store lost one: a bug, not a case.
     begun = await deps.ledger.begin(action, None, None)
     if isinstance(begun, Failure):
         return begun
+    if begun.is_new:
+        raise ValueError(f"the intent of {target} has no row in the ledger")
     return await settle_row(session_id, view, call, begun.effect, deps)
 
 

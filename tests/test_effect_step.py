@@ -5,7 +5,10 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
+import pytest
+
 from lamplighter.adapters import MadeUpWorld, ScriptedReply, WorldTools
+from lamplighter.adapters.in_memory import InMemoryEffectLedger
 from lamplighter.adapters.made_up_world import text_hash
 from lamplighter.core import TurnEnd, harness_texts, run_turn
 from lamplighter.core.action import action_hash
@@ -51,6 +54,9 @@ class Hooked:
         self.inner = inner
         self.on_apply: Callable[[], Awaitable[None]] | None = None
         self.on_plan: Callable[[], Awaitable[None]] | None = None
+        self.after_apply: (
+            Callable[[ToolResult | Failure], ToolResult | Failure] | None
+        ) = None
         self.checks = 0
         self.entries: tuple[ToolEntry, ...] | None = None
 
@@ -72,7 +78,8 @@ class Hooked:
     ) -> ToolResult | Failure:
         if self.on_apply is not None:
             await self.on_apply()
-        return await self.inner.apply(name, arguments, plan)
+        applied = await self.inner.apply(name, arguments, plan)
+        return applied if self.after_apply is None else self.after_apply(applied)
 
     async def check(self, probe: JsonObject) -> bool | None:
         self.checks += 1
@@ -322,6 +329,24 @@ def test_a_failure_that_cannot_say_is_unconfirmed_with_what_the_check_found() ->
         assert row.resolution is not None and row.resolution.happened is lands
 
 
+def test_a_failure_that_says_it_changed_the_world_has_a_done_row() -> None:
+    # In the ledger, failed means "did not happen", so this row is done.
+    scene = scene_of(asks(put("tea", "mint")))
+    lost = Failure(
+        kind="unavailable",
+        effect="done",
+        message="The text was written and the answer was lost.",
+        source="t",
+    )
+    scene.tools.after_apply = lambda _: lost
+    payload = result_of(played(scene))
+    assert payload["is_error"] is True
+    assert payload["text"] == harness_texts.tool_failed("put", lost.kind, lost.message)
+    assert scene.row.state == "done"
+    assert scene.row.result == EffectResult("done", payload)
+    assert scene.world.texts == {"tea": "mint"}
+
+
 class FailingPuts:
     """A blob store whose every put fails."""
 
@@ -533,6 +558,67 @@ def test_a_row_saved_still_running_is_checked_after_a_restart() -> None:
     assert scene.row.state == "resolved"
 
 
+SHAKY_FAILURE = "shaky_put failed (transient): The line dropped before the answer came."
+
+
+def shaky(lands: bool) -> ToolCallPart:
+    arguments: JsonObject = {"name": "tea", "text": "mint", "lands": lands}
+    return ToolCallPart(id="c1", name="shaky_put", arguments=arguments)
+
+
+def unconfirmed_text(lands: bool) -> str:
+    found = harness_texts.TOOK_EFFECT if lands else harness_texts.NO_EFFECT
+    return f"{SHAKY_FAILURE} It could not say whether anything was changed. {found}"
+
+
+def test_a_settled_row_whose_result_was_lost_gives_what_the_check_found() -> None:
+    for lands in (True, False):
+        scene = scene_of(asks(shaky(lands)))
+
+        async def body(scene: Scene) -> None:
+            log = scene.loop.log
+            scene.loop.log = LosesTheResult(log)  # type: ignore[assignment]
+            assert isinstance(await scene.turn(), Failure)
+            assert scene.row.state == "resolved"
+            scene.loop.log = log
+            assert isinstance(await scene.turn(), TurnEnd)
+
+        payload = result_of(played(scene, body))
+        assert payload["harness"] == "unconfirmed"
+        assert payload["text"] == unconfirmed_text(lands)
+        assert len(scene.world.started) == 1
+
+
+class ResolveFailsOnce(FinishFailsOnce):
+    """A ledger whose first `resolve` fails, as a kill before it would."""
+
+    async def finish(self, effect_id: int, result: Any) -> Any:
+        return await self.inner.finish(effect_id, result)
+
+    async def resolve(self, effect_id: int, outcome: Any) -> Any:
+        if not self.failed:
+            self.failed = True
+            return Failure(kind="unavailable", effect="none", message="No.", source="t")
+        return await self.inner.resolve(effect_id, outcome)
+
+
+def test_an_unconfirmed_row_left_unknown_is_checked_with_its_failure_later() -> None:
+    for lands in (True, False):
+        scene = scene_of(asks(shaky(lands)))
+
+        async def body(scene: Scene) -> None:
+            scene.loop.ledger = ResolveFailsOnce(scene.loop.ledger)  # type: ignore[assignment]
+            assert isinstance(await scene.turn(), Failure)
+            assert scene.row.state == "unknown"
+            assert isinstance(await scene.turn(), TurnEnd)
+
+        payload = result_of(played(scene, body))
+        assert payload["harness"] == "unconfirmed"
+        assert payload["text"] == unconfirmed_text(lands)
+        assert scene.row.state == "resolved"
+        assert len(scene.world.started) == 1
+
+
 def test_a_change_with_its_intent_saved_is_settled_and_not_applied_again() -> None:
     scene = scene_of(asks(put("tea", "mint")))
 
@@ -552,6 +638,23 @@ def test_a_change_with_its_intent_saved_is_settled_and_not_applied_again() -> No
     assert scene.world.changed == [("put", '{"name":"tea","text":"mint"}')]
 
 
+def test_a_saved_intent_whose_row_is_gone_is_a_bug_and_nothing_is_applied() -> None:
+    scene = scene_of(asks(put("tea", "mint")))
+
+    async def body(scene: Scene) -> None:
+        log = scene.loop.log
+        scene.loop.log = LosesTheResult(log)  # type: ignore[assignment]
+        assert isinstance(await scene.turn(), Failure)
+        scene.loop.log = log
+        # A store that lost the row, as no kill can make it.
+        scene.loop.ledger = InMemoryEffectLedger(scene.loop.clock, 200_000)
+        with pytest.raises(ValueError, match="has no row in the ledger"):
+            await scene.turn()
+
+    played(scene, body)
+    assert len(scene.world.started) == 1
+
+
 def test_before_and_after_tool_see_a_change_and_not_a_call_its_plan_answered() -> None:
     seen: Seen = []
     scene = scene_of(asks(put("tea", "mint")), asks(put("tea", "mint", call_id="c2")))
@@ -568,8 +671,15 @@ def test_a_stop_known_before_apply_starts_it_never_and_fails_the_row() -> None:
         await stop_now(scene.loop, "s1")
 
     scene.tools.on_plan = stop
-    payload = result_of(played(scene))
+    seen: Seen = []
+    scene.loop.observers = recording(seen, "a")
+    events = played(scene)
+    payload = result_of(events)
     assert payload["harness"] == "not_run"
+    # Nothing ran, so nothing ended and no time was taken.
+    assert [name for name, _ in seen if name.endswith("_tool")] == ["a.before_tool"]
+    (result,) = of(events, "tool_result")
+    assert result.duration_ms is None
     assert scene.row.state == "failed"
     assert scene.row.result == EffectResult("failed", payload)
     assert scene.world.started == []
