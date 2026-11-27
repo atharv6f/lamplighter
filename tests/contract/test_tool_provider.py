@@ -395,6 +395,20 @@ def test_check_cannot_tell_for_a_probe_made_in_another_place(
     assert asyncio.run(made.elsewhere.check(plan.probe)) is None
 
 
+def test_apply_of_a_plan_made_in_another_place_refuses_and_changes_nothing(
+    changing: ToolKind, tmp_path: Path
+) -> None:
+    made = changing.make(tmp_path, WaitingClock())
+    assert made.elsewhere is not None
+    change = _change(changing).call
+    before = made.snapshot()
+    plan = asyncio.run(_planned(made, change))
+    result = asyncio.run(made.elsewhere.apply(*change, plan))
+    assert result.effect == "none"
+    assert isinstance(result, Failure) or result.is_error
+    assert made.snapshot() == before
+
+
 def test_check_cannot_tell_while_the_apply_of_its_change_is_at_work(
     changing: ToolKind, tmp_path: Path
 ) -> None:

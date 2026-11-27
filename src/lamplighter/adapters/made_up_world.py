@@ -199,6 +199,13 @@ class WorldTools:
             return self._launch(arguments, plan)
         if name not in _PUTS or plan.probe is None:
             return _refused(name, "is not a change with a probe")
+        if not self._fits(arguments, plan.probe):
+            return Failure(
+                kind="invalid_input",
+                effect="none",
+                message="The plan is not for these arguments in this world.",
+                source=_SOURCE,
+            )
         key = canonical_json(plan.probe)
         self._at_work.append(key)
         work = self._put(name, arguments, plan.probe)
@@ -222,6 +229,15 @@ class WorldTools:
         if now == probe.get("before"):
             return False
         return None
+
+    def _fits(self, arguments: JsonObject, probe: JsonObject) -> bool:
+        text = arguments.get("text")
+        return (
+            probe.get("world") == self._world.name
+            and probe.get("name") == arguments.get("name")
+            and isinstance(text, str)
+            and probe.get("after") == text_hash(text)
+        )
 
     def _launch(self, arguments: JsonObject, plan: Plan) -> ToolResult:
         self._world.launched.append(plan.target)

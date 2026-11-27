@@ -42,6 +42,26 @@ def test_a_put_plans_a_probe_and_a_saved_copy_then_writes() -> None:
     assert world.changed == [("put", '{"name":"tea","text":"mint"}')]
 
 
+def test_a_plan_for_other_arguments_or_another_world_is_refused_unwritten() -> None:
+    world = MadeUpWorld(texts={"tea": "green"})
+    plan = asyncio.run(tools_on(world).plan("put", {"name": "tea", "text": "mint"}))
+    assert isinstance(plan, Plan)
+    other = WorldTools(
+        MadeUpWorld(name="world-2", texts={"tea": "green"}), WaitingClock()
+    )
+    tries = (
+        (tools_on(world), {"text": "mint"}),
+        (tools_on(world), {"name": "tea", "text": "lime"}),
+        (tools_on(world), {"name": "tea"}),
+        (other, {"name": "tea", "text": "mint"}),
+    )
+    for tools, arguments in tries:
+        result = asyncio.run(tools.apply("put", arguments, plan))
+        assert isinstance(result, Failure) and result.kind == "invalid_input"
+    assert world.texts == {"tea": "green"}
+    assert world.changed == []
+
+
 def test_a_put_of_the_same_text_plans_nothing() -> None:
     tools = tools_on(MadeUpWorld(texts={"tea": "green"}))
     planned = asyncio.run(tools.plan("put", {"name": "tea", "text": "green"}))
