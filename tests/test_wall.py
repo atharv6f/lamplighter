@@ -12,6 +12,7 @@ import os
 import shutil
 import socket
 import subprocess
+import tempfile
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,7 +34,8 @@ HOME_DENY = """(deny file-read*
   (subpath "/Users")
   (subpath "/Volumes")
   (subpath "/Library/Keychains")
-  (subpath "/private/var/root"))"""
+  (subpath "/private/var/root")
+  (subpath "/private/var/folders"))"""
 
 
 @dataclass(frozen=True)
@@ -226,25 +228,46 @@ def test_the_store_cannot_be_read_written_or_listed(
     assert sorted(p.name for p in place.state.iterdir()) == ["store.txt"]
 
 
+@pytest.fixture
+def open_folder() -> Iterator[Path]:
+    """A folder outside the home and temp folders, which a command may read."""
+    folder = Path(tempfile.mkdtemp(prefix="lamplighter-wall-", dir="/private/tmp"))
+    yield folder
+    shutil.rmtree(folder)
+
+
 @pytest.mark.parametrize("profile", ["read_only", "workspace_write"])
-def test_the_stores_own_rule_holds_outside_the_home_folders(
-    place: Place, tmp_path: Path, profile: Profile
+def test_the_stores_own_rule_holds_outside_the_closed_folders(
+    place: Place, open_folder: Path, profile: Profile
 ) -> None:
-    # The temp folder is readable to a command, so only the store's rule
-    # can refuse here. The file beside the store shows that.
-    state = Path(os.path.realpath(tmp_path)) / "state"
+    # The folder is readable to a command, so only the store's rule can
+    # refuse here. The file beside the store shows that.
+    state = open_folder / "state"
     state.mkdir()
     (state / "store.txt").write_text(DECOY)
-    (tmp_path / "open.txt").write_text("readable")
+    (open_folder / "open.txt").write_text("readable")
     wall = place.wall(state)
     read = place.run("/bin/cat", str(state / "store.txt"), profile=profile, wall=wall)
     place.run("/usr/bin/touch", str(state / "new"), profile=profile, wall=wall)
     listed = place.run("/bin/ls", str(state), profile=profile, wall=wall)
-    beside = place.run("/bin/cat", str(tmp_path / "open.txt"), wall=wall)
+    beside = place.run("/bin/cat", str(open_folder / "open.txt"), wall=wall)
     assert beside.output == b"readable"
     assert read.exit_code != 0 and DECOY.encode() not in read.output
     assert listed.exit_code != 0
     assert sorted(p.name for p in state.iterdir()) == ["store.txt"]
+
+
+def test_the_temp_folders_cannot_be_read_or_listed(
+    place: Place, tmp_path: Path
+) -> None:
+    # Every user's temp folder is under /private/var/folders, as pytest's is.
+    folder = Path(os.path.realpath(tmp_path))
+    assert folder.is_relative_to("/private/var/folders")
+    (folder / "decoy.txt").write_text(DECOY)
+    read = place.run("/bin/cat", str(folder / "decoy.txt"))
+    listed = place.run("/bin/ls", str(folder))
+    assert read.exit_code != 0 and DECOY.encode() not in read.output
+    assert listed.exit_code != 0 and b"decoy.txt" not in listed.output
 
 
 def test_read_only_refuses_every_write(place: Place) -> None:

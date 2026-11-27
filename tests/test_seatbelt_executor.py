@@ -273,7 +273,7 @@ def test_the_profiles_are_pinned_and_differ_only_in_writing() -> None:
     # A change to a profile changes the config id, so it must be on purpose:
     # this value changes with it.
     assert profiles_sha256() == (
-        "6f85f8c6eeb55b08972e2e2359b4037bfef7ce86b79cb92da43c6f466599f035"
+        "913be26b7e055c79d7a41a79a9c5d960ab9765ccc3eddf580afbf575f556f6be"
     )
     read_only = PROFILES["read_only"].splitlines()
     added = [

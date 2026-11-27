@@ -2,9 +2,11 @@
 
 The language is Apple's sandbox profile language, which Apple does not
 document. In it the last rule that matches decides, so the order below is
-the meaning: reads are allowed, closed under the home folders, opened again
-for the two folders, and the store is closed last. There is no rule about
-the network, so under `(deny default)` every connection is refused.
+the meaning: reads are allowed, closed under the home folders and the temp
+folders, opened again for the two folders, and the store is closed last.
+No rule lets a command see a closed folder's name, so it cannot learn that
+one exists. There is no rule about the network, so under `(deny default)`
+every connection is refused.
 """
 
 import hashlib
@@ -79,14 +81,17 @@ _BASE_RULES = """(version 1)
 (allow ipc-posix-sem)
 """
 
+# `/private/var/folders` holds every user's temp folder. Closing it broke
+# none of git, Python, mktemp, sort, a process pool or a here-document on a
+# Mac, because a command's temp folder is in the scratch folder.
 _READ = """
 (allow file-read*)
 (deny file-read*
   (subpath "/Users")
   (subpath "/Volumes")
   (subpath "/Library/Keychains")
-  (subpath "/private/var/root"))
-(allow file-read-metadata (vnode-type DIRECTORY))
+  (subpath "/private/var/root")
+  (subpath "/private/var/folders"))
 (allow file-read* (subpath (param "WORK")) (subpath (param "SCRATCH")))
 """
 
