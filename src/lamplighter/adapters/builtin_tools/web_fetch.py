@@ -76,9 +76,15 @@ def system_web() -> WebAccess:
     """Give the real network: the event loop's look-up, and checked certificates."""
 
     async def resolve(host: str, port: int) -> tuple[str, ...]:
-        found = await asyncio.get_running_loop().getaddrinfo(
-            host, port, family=socket.AF_INET, type=socket.SOCK_STREAM
-        )
+        try:
+            found = await asyncio.get_running_loop().getaddrinfo(
+                host, port, family=socket.AF_INET, type=socket.SOCK_STREAM
+            )
+        except UnicodeError as error:
+            # The look-up spells the name for DNS first, and a name with an
+            # empty label or one over 63 bytes cannot be spelled. No name
+            # like that can be found.
+            raise socket.gaierror(socket.EAI_NONAME, str(error)) from error
         return tuple(dict.fromkeys(str(info[4][0]) for info in found))
 
     return WebAccess(
@@ -125,9 +131,10 @@ async def _follow(url: str, settings: ToolSettings, web: WebAccess) -> ToolResul
         got = await _one_request(parsed, settings, web)
         if not isinstance(got, httpx.URL):
             return got
-        if not _may_follow(parsed, got):
+        elsewhere = _not_followed(parsed, got)
+        if elsewhere is not None:
             return ToolResult(
-                f"The page redirects to another host: {got}. Nothing was fetched"
+                f"The page redirects {elsewhere}: {got}. Nothing was fetched"
                 " from it. Call web_fetch with that address to read it.",
                 False,
                 "none",
@@ -275,12 +282,17 @@ async def _body(
     return bytes(kept), False
 
 
-def _may_follow(old: httpx.URL, new: httpx.URL) -> bool:
-    # The same host once a "www." in front is dropped, and never from https
-    # back to http.
+def _not_followed(old: httpx.URL, new: httpx.URL) -> str | None:
+    """Say where a redirect leads that is not followed, or None to follow it.
+
+    It is followed to the same host once a "www." in front is dropped, and
+    never from https back to http.
+    """
+    if old.host.removeprefix("www.") != new.host.removeprefix("www."):
+        return "to another host"
     if old.scheme == "https" and new.scheme != "https":
-        return False
-    return old.host.removeprefix("www.") == new.host.removeprefix("www.")
+        return "from https to http"
+    return None
 
 
 def _readable(media_type: str) -> bool:

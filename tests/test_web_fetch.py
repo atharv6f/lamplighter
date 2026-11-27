@@ -177,15 +177,19 @@ def test_five_redirects_are_followed_and_a_sixth_is_not(work: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    "to",
-    ["https://other.test/x", "http://10.0.0.1/", "http://example.test/down"],
+    ("to", "where"),
+    [
+        ("https://other.test/x", "to another host"),
+        ("http://10.0.0.1/", "to another host"),
+        ("http://example.test/down", "from https to http"),
+    ],
 )
 def test_a_redirect_elsewhere_or_down_to_http_is_given_and_not_followed(
-    work: Path, to: str
+    work: Path, to: str, where: str
 ) -> None:
     net = Net(pages={"https://example.test/a": redirect(to)})
     assert fetch(work, net, "https://example.test/a") == ToolResult(
-        f"The page redirects to another host: {to}. Nothing was fetched from it."
+        f"The page redirects {where}: {to}. Nothing was fetched from it."
         " Call web_fetch with that address to read it.",
         False,
         "none",
@@ -553,3 +557,19 @@ def test_the_real_look_up_gives_ipv4_addresses_only() -> None:
     assert asyncio.run(look_up("127.1")) == ("127.0.0.1",)
     with pytest.raises(socket.gaierror):
         asyncio.run(look_up("::1"))
+
+
+@pytest.mark.parametrize("host", ["a..test", ".test", "a" * 64 + ".test"])
+def test_a_name_dns_cannot_spell_is_not_found_and_raises_nothing(
+    host: str, work: Path
+) -> None:
+    # The real look-up spells the name before it asks, so no question is
+    # sent for these.
+    tools = tools_on(work, web=system_web())
+    result = asyncio.run(tools.call("web_fetch", {"url": f"http://{host}/"}))
+    assert result == ToolResult(
+        f"The name {host} could not be found, or has no IPv4 address. web_fetch"
+        " connects over IPv4 only.",
+        True,
+        "none",
+    )
