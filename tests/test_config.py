@@ -1,4 +1,5 @@
 import dataclasses
+import re
 from pathlib import Path
 
 import pytest
@@ -255,10 +256,14 @@ def test_a_tool_setting_at_the_edge_of_its_range_is_accepted(
     load_config(write(tmp_path, GOOD.replace(good, edge)))
 
 
-@pytest.mark.parametrize("work", ["~", "~/", "/"])
-def test_the_home_folder_itself_or_the_root_is_refused_as_a_tool_folder(
-    tmp_path: Path, work: str
+@pytest.mark.parametrize("work", ["~", "~/", "/", "above home"])
+def test_a_tool_folder_that_holds_the_home_folder_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, work: str
 ) -> None:
+    # A home folder two deep, so the folder above it is not the root.
+    home = tmp_path / "people" / "made-up"
+    monkeypatch.setenv("HOME", str(home))
+    work = str(home.parent) if work == "above home" else work
     # The other folders are put outside the home folder, so only this rule
     # can refuse the home folder.
     text = (
@@ -266,8 +271,9 @@ def test_the_home_folder_itself_or_the_root_is_refused_as_a_tool_folder(
         .replace('scratch_dir = "~/made-up-scratch"', 'scratch_dir = "/made-up/s"')
         .replace('dir = "~/.lamplighter"', 'dir = "/made-up/store"')
     )
-    expected = "/" if work == "/" else str(Path.home())
-    with pytest.raises(ValueError, match=f"^tools.work_dir must not be {expected}$"):
+    expected = {"~": str(home), "~/": str(home)}.get(work, work)
+    refused = f"^tools.work_dir must not be {re.escape(expected)}, which holds the"
+    with pytest.raises(ValueError, match=refused):
         load_config(write(tmp_path, text))
 
 

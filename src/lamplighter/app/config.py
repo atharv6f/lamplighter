@@ -176,6 +176,8 @@ def _tool_folder(name: str, setting: str, home: Path) -> Path:
         folder = Path(setting)
     else:
         raise ValueError(f"{name} must start with ~/ or /, not {setting!r}")
-    if folder in (Path("/"), home):
-        raise ValueError(f"{name} must not be {folder}")
+    # A command may change anything in a tool folder, so one that holds the
+    # home folder would put all of it in reach.
+    if home.is_relative_to(folder):
+        raise ValueError(f"{name} must not be {folder}, which holds the home folder")
     return folder

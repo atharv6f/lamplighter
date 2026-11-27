@@ -61,7 +61,8 @@ cancel_bound_ms = 800
 # The folder the tools work in. Paths the model gives are relative to it.
 work_dir = "~/lamplighter-work"
 # Where a command gets its home folder and its temp folder. It holds nothing
-# of yours. Neither folder may be the store's folder or lie inside another.
+# of yours. Neither folder may be the store's folder, lie inside another, or
+# hold your home folder.
 scratch_dir = "~/Library/Caches/Lamplighter"
 # The PATH a command gets.
 shell_path = "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"

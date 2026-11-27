@@ -152,9 +152,12 @@ def test_a_command_has_no_network(place: Place) -> None:
 # More ways out.
 
 
-def test_the_real_ssh_folder_cannot_be_listed(place: Place) -> None:
-    ssh = Path(os.path.realpath(Path.home())) / ".ssh"
-    assert exit_code_only(place, f'/bin/ls "{ssh}"') != 0
+def test_a_real_folder_in_the_home_folder_cannot_be_listed(place: Place) -> None:
+    # Every Mac has this folder, so the refusal cannot come from its being
+    # missing, as it could for a folder such as ~/.ssh.
+    library = Path(os.path.realpath(Path.home())) / "Library"
+    assert library.is_dir()
+    assert exit_code_only(place, f'/bin/ls "{library}"') != 0
 
 
 def test_a_grandchild_cannot_write_outside(place: Place) -> None:
