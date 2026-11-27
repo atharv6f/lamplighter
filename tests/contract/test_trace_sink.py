@@ -2,36 +2,64 @@
 
 import asyncio
 import dataclasses
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Generator, Sequence
 from typing import Any
 
+import httpx
 import pytest
 
 from lamplighter.adapters.in_memory import InMemoryTraceSink
-from lamplighter.ports import Span, SpanKind, TraceSink
+from lamplighter.adapters.phoenix import PhoenixSink
+from lamplighter.ports import Failure, Span, SpanKind, TraceSink
+from tests.fake_clock import FakeClock
+from tests.phoenix_stand_in import stand_in
 
-type Held = Callable[[], Coroutine[Any, Any, dict[str, Span]]]
+# What the store holds: the name of each span, by its id.
+type Held = Callable[[], dict[str, str]]
 
 
 def run[T](call: Coroutine[Any, Any, T]) -> T:
     return asyncio.run(call)
 
 
-def in_memory() -> tuple[TraceSink, Held]:
+def in_memory() -> Generator[tuple[TraceSink, Held]]:
     sink = InMemoryTraceSink()
-
-    async def held() -> dict[str, Span]:
-        return {span.span_id: span for span in sink.held}
-
-    return sink, held
+    yield sink, lambda: {span.span_id: span.name for span in sink.held}
 
 
-SINKS: dict[str, Callable[[], tuple[TraceSink, Held]]] = {"in_memory": in_memory}
+class _OnePhoenixClient:
+    """A Phoenix sink with a new HTTP client for each export.
+
+    Each test step runs in an event loop of its own, and a client belongs
+    to the loop it was made in.
+    """
+
+    def __init__(self, url: str) -> None:
+        self.url = url
+        self.leaves_this_mac = PhoenixSink(
+            url, "lamplighter", httpx.AsyncClient(), FakeClock()
+        ).leaves_this_mac
+
+    async def export(self, spans: Sequence[Span]) -> Failure | None:
+        async with httpx.AsyncClient(trust_env=False) as http:
+            sink = PhoenixSink(self.url, "lamplighter", http, FakeClock())
+            return await sink.export(spans)
+
+
+def phoenix() -> Generator[tuple[TraceSink, Held]]:
+    with stand_in() as server:
+        yield _OnePhoenixClient(server.url), server.names
+
+
+SINKS: dict[str, Callable[[], Generator[tuple[TraceSink, Held]]]] = {
+    "in_memory": in_memory,
+    "phoenix_stand_in": phoenix,
+}
 
 
 @pytest.fixture(params=list(SINKS.values()), ids=list(SINKS))
-def made(request: pytest.FixtureRequest) -> tuple[TraceSink, Held]:
-    return request.param()
+def made(request: pytest.FixtureRequest) -> Generator[tuple[TraceSink, Held]]:
+    yield from request.param()
 
 
 TRACE = "0e9989490d36bd20896dd8df2ee81290"
@@ -67,7 +95,7 @@ def test_an_empty_batch_returns_none_and_reaches_nobody(
     sink, held = made
 
     assert run(sink.export([])) is None
-    assert run(held()) == {}
+    assert held() == {}
 
 
 def test_after_none_the_store_holds_every_span_of_the_batch(
@@ -76,7 +104,7 @@ def test_after_none_the_store_holds_every_span_of_the_batch(
     sink, held = made
 
     assert run(sink.export([ROOT, STEP, MODEL])) is None
-    assert run(held()) == {s.span_id: s for s in (ROOT, STEP, MODEL)}
+    assert held() == {s.span_id: s.name for s in (ROOT, STEP, MODEL)}
 
 
 def test_the_same_batch_again_changes_nothing(made: tuple[TraceSink, Held]) -> None:
@@ -85,7 +113,7 @@ def test_the_same_batch_again_changes_nothing(made: tuple[TraceSink, Held]) -> N
 
     assert run(sink.export([ROOT, STEP])) is None
     assert run(sink.export([STEP])) is None
-    assert run(held()) == {s.span_id: s for s in (ROOT, STEP)}
+    assert held() == {s.span_id: s.name for s in (ROOT, STEP)}
 
 
 def test_a_known_id_with_other_content_keeps_the_first_copy(
@@ -96,7 +124,7 @@ def test_a_known_id_with_other_content_keeps_the_first_copy(
     other = dataclasses.replace(STEP, name="step 2", duration_ms=999)
 
     assert run(sink.export([other])) is None
-    assert run(held()) == {STEP.span_id: STEP}
+    assert held() == {STEP.span_id: STEP.name}
 
 
 def test_a_child_may_come_first_and_a_parent_may_never_come(
@@ -106,7 +134,7 @@ def test_a_child_may_come_first_and_a_parent_may_never_come(
 
     assert run(sink.export([MODEL])) is None
     assert run(sink.export([STEP])) is None
-    assert run(held()) == {s.span_id: s for s in (MODEL, STEP)}
+    assert held() == {s.span_id: s.name for s in (MODEL, STEP)}
 
 
 def test_whether_it_leaves_this_mac_never_changes(made: tuple[TraceSink, Held]) -> None:

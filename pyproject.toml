@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "httpx>=0.28.1,<1",
+    "opentelemetry-proto==1.45.2",
 ]
 
 [project.scripts]
@@ -69,3 +70,12 @@ name = "only adapters and app use the HTTP library"
 type = "forbidden"
 source_modules = ["lamplighter.core", "lamplighter.ports"]
 forbidden_modules = ["httpx"]
+
+[[tool.importlinter.contracts]]
+name = "only the span encoder uses OpenTelemetry's message classes"
+type = "forbidden"
+source_modules = ["lamplighter"]
+forbidden_modules = ["opentelemetry", "google"]
+ignore_imports = [
+    "lamplighter.adapters.phoenix.otlp -> opentelemetry",
+]
