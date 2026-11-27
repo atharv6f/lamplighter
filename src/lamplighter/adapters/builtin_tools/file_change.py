@@ -224,8 +224,17 @@ def _write_beside(folder: int, name: str, data: bytes, mode: int) -> None:
         while view:
             view = view[os.write(fd, view) :]
         os.fsync(fd)
+    except OSError:
+        # The file is this write's own, made above, and the write failed.
+        _remove_beside(folder, name)
+        raise
     finally:
         os.close(fd)
+
+
+def _remove_beside(folder: int, name: str) -> None:
+    with contextlib.suppress(OSError):
+        os.unlink(name + NEW_SUFFIX, dir_fd=folder)
 
 
 def _after_the_rename_failed(
@@ -238,6 +247,8 @@ def _after_the_rename_failed(
     if seen is True:
         return ToolResult(done, False, "done")
     if seen is False:
+        # The rename did not happen, so the new file is still this write's.
+        _remove_beside(folder, name)
         return _not_written(path, error)
     return Failure(
         kind="unavailable",

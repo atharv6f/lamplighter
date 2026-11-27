@@ -301,6 +301,29 @@ def test_an_error_at_the_rename_is_settled_by_reading_the_file(
         assert (result.kind, result.effect) == ("unavailable", "unknown")
     else:
         assert result == expected
+    if expected is not None and expected.effect == "none":
+        # Not written, so nothing of the write is left.
+        assert not (work / "a.txt.lamplighter-new").exists()
+
+
+def test_a_write_that_fails_part_way_leaves_nothing_of_itself(
+    work: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (work / "a.txt").write_text("one\n")
+    tools = tools_on(work)
+    plan = planned(tools, "write_file", path="a.txt", content="two\n")
+
+    def full_drive(fd: int, data: object) -> int:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(os, "write", full_drive)
+    result = changed(tools, "write_file", plan, path="a.txt", content="two\n")
+    monkeypatch.undo()
+    assert result == ToolResult(
+        "a.txt could not be written: No space left on device.", True, "none"
+    )
+    assert sorted(p.name for p in work.iterdir()) == ["a.txt"]
+    assert (work / "a.txt").read_text() == "one\n"
 
 
 def test_check_says_true_false_or_cannot_tell(work: Path, tmp_path: Path) -> None:
@@ -359,6 +382,50 @@ def test_check_cannot_tell_while_the_write_is_at_work_and_a_cancel_waits_for_it(
     assert during is None
     assert result == done("Wrote 4 bytes to a.txt.")
     assert after is True
+
+
+def test_a_second_change_to_a_file_is_refused_while_the_first_is_at_work(
+    work: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Both would write the same unfinished file beside a.txt, so the first
+    # could rename the second's half-written bytes into place.
+    (work / "a.txt").write_text("one\n")
+    tools = tools_on(work)
+    first = {"path": "a.txt", "content": "two\n"}
+    second = {"path": "a.txt", "old_text": "one", "new_text": "three"}
+    first_plan = planned(tools, "write_file", **first)
+    second_plan = planned(tools, "edit_file", **second)
+    started, release = threading.Event(), threading.Event()
+    real_fsync = os.fsync
+
+    def held_fsync(fd: int) -> None:
+        started.set()
+        release.wait(5)
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", held_fsync)
+
+    async def scene() -> tuple[ToolResult | Failure, ToolResult | Failure]:
+        task = asyncio.create_task(tools.apply("write_file", first, first_plan))
+        await asyncio.to_thread(started.wait, 5)
+        try:
+            refusal = await asyncio.wait_for(
+                tools.apply("edit_file", second, second_plan), 2
+            )
+        finally:
+            release.set()
+        return refusal, await task
+
+    refusal, result = asyncio.run(scene())
+    assert refusal == ToolResult(
+        f"An earlier change to {first_plan.target} is still being written."
+        " Nothing was written. Read the file again and repeat the call.",
+        True,
+        "none",
+    )
+    assert result == done("Wrote 4 bytes to a.txt.")
+    assert sorted(p.name for p in work.iterdir()) == ["a.txt"]
+    assert (work / "a.txt").read_text() == "two\n"
 
 
 def test_the_new_file_and_then_its_folder_are_forced_to_the_drive(

@@ -41,7 +41,8 @@ class BuiltinTools:
     Every file is reached from one handle on the work folder, opened when
     the provider is made, and its blocking work runs in a worker thread. A
     file change waits for its thread, even when it is cancelled, so it
-    always answers with what the thread did. Searches and commands run
+    always answers with what the thread did. While that thread runs, a
+    second change to the same file is refused. Searches and commands run
     through the Executor, behind its wall.
     """
 
@@ -74,8 +75,8 @@ class BuiltinTools:
                 key=lambda entry: entry.spec.name,
             )
         )
-        # The probes of the changes whose thread has not ended.
-        self._at_work: list[str] = []
+        # The probe and the target of each change whose thread has not ended.
+        self._at_work: list[tuple[str, str]] = []
 
     def list_tools(self) -> tuple[ToolEntry, ...]:
         """Give every entry, sorted by name."""
@@ -124,21 +125,33 @@ class BuiltinTools:
         }
         if name not in makers or plan.probe is None:
             return _no_tool(name, "changes something")
+        if any(target == plan.target for _, target in self._at_work):
+            # Two writes of one file share the name of the unfinished file,
+            # so the second must not start while the first may still rename.
+            return ToolResult(
+                f"An earlier change to {plan.target} is still being written."
+                " Nothing was written. Read the file again and repeat the call.",
+                True,
+                "none",
+            )
         job = makers[name](self._work, arguments, plan.probe)
         if isinstance(job, ToolResult):
             return job
-        return await self._past_any_cancel(job, canonical_json(plan.probe))
+        at_work = (canonical_json(plan.probe), plan.target)
+        return await self._past_any_cancel(job, at_work)
 
     async def check(self, probe: JsonObject) -> bool | None:
         """Say whether a file holds what the probe's change put there."""
-        if canonical_json(probe) in self._at_work:
+        if any(key == canonical_json(probe) for key, _ in self._at_work):
             return None
         return await asyncio.to_thread(file_check, self._work, probe)
 
-    async def _past_any_cancel(self, job: _Job, key: str) -> ToolResult | Failure:
-        self._at_work.append(key)
+    async def _past_any_cancel(
+        self, job: _Job, at_work: tuple[str, str]
+    ) -> ToolResult | Failure:
+        self._at_work.append(at_work)
         thread = asyncio.get_running_loop().run_in_executor(None, job)
-        thread.add_done_callback(lambda _: self._at_work.remove(key))
+        thread.add_done_callback(lambda _: self._at_work.remove(at_work))
         while True:
             # Python cannot stop a thread. Letting the cancel through would
             # let a check run while the thread may still rename the file.
