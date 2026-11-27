@@ -12,8 +12,8 @@ import pytest
 
 from lamplighter.adapters.in_memory import InMemoryTraceSink
 from lamplighter.adapters.phoenix import PhoenixSink
+from lamplighter.adapters.system_clock import SystemClock
 from lamplighter.ports import Failure, Span, SpanKind, TraceSink
-from tests.fake_clock import FakeClock
 from tests.phoenix_process import running_phoenix
 from tests.phoenix_stand_in import stand_in
 
@@ -40,12 +40,14 @@ class _OnePhoenixClient:
     def __init__(self, url: str) -> None:
         self.url = url
         self.leaves_this_mac = PhoenixSink(
-            url, "lamplighter", httpx.AsyncClient(), FakeClock()
+            url, "lamplighter", httpx.AsyncClient(), SystemClock()
         ).leaves_this_mac
 
     async def export(self, spans: Sequence[Span]) -> Failure | None:
         async with httpx.AsyncClient(trust_env=False) as http:
-            sink = PhoenixSink(self.url, "lamplighter", http, FakeClock())
+            # A real Phoenix stores in real time, so the confirm window must be
+            # real seconds too.
+            sink = PhoenixSink(self.url, "lamplighter", http, SystemClock())
             return await sink.export(spans)
 
 
@@ -122,7 +124,7 @@ def test_after_none_the_store_holds_every_span_of_the_batch(
 
 def test_the_same_batch_again_changes_nothing(made: tuple[TraceSink, Held]) -> None:
     sink, held = made
-    run(sink.export([ROOT, STEP]))
+    assert run(sink.export([ROOT, STEP])) is None
 
     assert run(sink.export([ROOT, STEP])) is None
     assert run(sink.export([STEP])) is None
@@ -133,7 +135,7 @@ def test_a_known_id_with_other_content_keeps_the_first_copy(
     made: tuple[TraceSink, Held],
 ) -> None:
     sink, held = made
-    run(sink.export([STEP]))
+    assert run(sink.export([STEP])) is None
     other = dataclasses.replace(STEP, name="step 2", duration_ms=999)
 
     assert run(sink.export([other])) is None
@@ -153,7 +155,7 @@ def test_a_child_may_come_first_and_a_parent_may_never_come(
 def test_whether_it_leaves_this_mac_never_changes(made: tuple[TraceSink, Held]) -> None:
     sink, _ = made
     first = sink.leaves_this_mac
-    run(sink.export([ROOT]))
+    assert run(sink.export([ROOT])) is None
 
     assert sink.leaves_this_mac == first
     assert not first

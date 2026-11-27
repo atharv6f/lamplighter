@@ -15,6 +15,8 @@ cd "$(dirname "$0")"
 # of more settings to load, and the keys of model providers. So nothing of the
 # caller's environment is passed on but the two entries needed to find
 # programs and the home folder. Every other setting is one of the lines below.
+# The assistant is off, and so is the shell it could run on the server, so
+# that no route of the viewer can run a command.
 exec env -i \
   PATH="$PATH" \
   HOME="$HOME" \
@@ -25,5 +27,6 @@ exec env -i \
   PHOENIX_TELEMETRY_ENABLED=false \
   PHOENIX_ALLOW_EXTERNAL_RESOURCES=false \
   PHOENIX_DISABLE_AGENT_ASSISTANT=true \
+  PHOENIX_AGENTS_DISABLE_BASH=true \
   PHOENIX_ENABLE_MCP_SERVER=false \
   uv run --frozen phoenix serve

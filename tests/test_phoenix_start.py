@@ -53,7 +53,7 @@ def started(
     return given, arguments, Path(f"{record}.pwd").read_text().strip()
 
 
-def test_uv_gets_path_home_and_the_eight_settings_and_nothing_else(
+def test_uv_gets_path_home_and_the_nine_settings_and_nothing_else(
     tmp_path: Path,
 ) -> None:
     folder = tmp_path / "phoenix"
@@ -70,6 +70,7 @@ def test_uv_gets_path_home_and_the_eight_settings_and_nothing_else(
         "PHOENIX_TELEMETRY_ENABLED": "false",
         "PHOENIX_ALLOW_EXTERNAL_RESOURCES": "false",
         "PHOENIX_DISABLE_AGENT_ASSISTANT": "true",
+        "PHOENIX_AGENTS_DISABLE_BASH": "true",
         "PHOENIX_ENABLE_MCP_SERVER": "false",
     }
     assert arguments == ["run", "--frozen", "phoenix", "serve"]

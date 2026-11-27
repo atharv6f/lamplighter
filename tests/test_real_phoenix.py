@@ -17,7 +17,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime
 from pathlib import Path
 
@@ -32,7 +32,13 @@ from lamplighter.core import TraceProjector
 from lamplighter.ports import Event, Failure, Span
 from tests.kill_kit import ended, killed_once, new_world, points, run_process
 from tests.kill_scenarios import ALL
-from tests.phoenix_process import VERSION, free_port, launch, running_phoenix
+from tests.phoenix_process import (
+    VERSION,
+    Phoenix,
+    free_port,
+    launch,
+    running_phoenix,
+)
 from tests.phoenix_stand_in import stand_in
 from tests.projector_kit import ListedLog
 from tests.span_checks import log_spans
@@ -49,12 +55,19 @@ KILLS = 10
 
 
 def drained(
-    url: str, events: Sequence[Event], cursor: InMemoryTraceCursor
+    url: str,
+    events: Sequence[Event],
+    cursor: InMemoryTraceCursor,
+    on_answer: Callable[[httpx.Response], Awaitable[None]] | None = None,
 ) -> list[object]:
-    """Pass over `events` into the Phoenix at `url` until a pass is idle or fails."""
+    """Pass over `events` into the Phoenix at `url` until a pass is idle or fails.
+
+    `on_answer`, if given, is called with each answer Phoenix sends.
+    """
+    hooks = {"response": [on_answer]} if on_answer else {}
 
     async def passes() -> list[object]:
-        async with httpx.AsyncClient(trust_env=False) as http:
+        async with httpx.AsyncClient(trust_env=False, event_hooks=hooks) as http:
             sink = PhoenixSink(url, "lamplighter", http, SystemClock())
             projector = TraceProjector(ListedLog(events), sink, cursor)
             done: list[object] = []
@@ -184,23 +197,51 @@ def test_a_phoenix_that_is_not_running_leaves_the_cursor_and_then_gets_all(
     assert held == {made.span.span_id for made in log_spans(events)}
 
 
+def killed_at_answer(
+    phoenix: Phoenix, answers: int
+) -> Callable[[httpx.Response], Awaitable[None]]:
+    """Kill `phoenix` as its answer number `answers` arrives, before it is read."""
+    seen = 0
+
+    async def on_answer(response: httpx.Response) -> None:
+        nonlocal seen
+        seen += 1
+        if seen == answers:
+            phoenix.stop()
+
+    return on_answer
+
+
 def test_phoenix_killed_at_ten_moments_of_an_export_loses_no_span(
     tmp_path: Path,
 ) -> None:
-    events = runs_log(200)
+    # Long enough that the first rounds never reach the end of the log.
+    events = runs_log(500)
     folder, port, grpc = tmp_path / "phoenix", free_port(), free_port()
     url, cursor, chance = (
         f"http://127.0.0.1:{port}",
         InMemoryTraceCursor(),
         random.Random(7),
     )
-    failures: list[object] = []
-    for _ in range(KILLS):
+    at_an_answer: list[list[object]] = []
+    on_a_timer: list[object] = []
+    # Half the kills land as one of Phoenix's first answers of the round
+    # arrives: after a 200 to a batch, or between two questions about it.
+    for _ in range(KILLS // 2):
+        phoenix = launch(folder, port, grpc)
+        try:
+            killer = killed_at_answer(phoenix, chance.randint(1, 3))
+            at_an_answer.append(drained(url, events, cursor, killer))
+        finally:
+            phoenix.stop()
+    # The other half land at a moment of the clock, which may be while
+    # Phoenix stores a batch, or after the export has ended.
+    for _ in range(KILLS - KILLS // 2):
         phoenix = launch(folder, port, grpc)
         killer = threading.Timer(chance.uniform(0.3, 3.0), phoenix.stop)
         killer.start()
         try:
-            failures += [
+            on_a_timer += [
                 d for d in drained(url, events, cursor) if isinstance(d, Failure)
             ]
         finally:
@@ -213,8 +254,10 @@ def test_phoenix_killed_at_ten_moments_of_an_export_loses_no_span(
     finally:
         phoenix.stop()
 
+    assert all(isinstance(each[-1], Failure) for each in at_an_answer), [
+        each[-1] for each in at_an_answer
+    ]
     assert not isinstance(last[-1], Failure), last[-1]
-    assert len(failures) >= KILLS // 2, "the kills landed after the exports"
     assert len(held) == promised_spans(events)
     assert held == {made.span.span_id for made in log_spans(events)}
 
@@ -254,6 +297,26 @@ def outside_address() -> str | None:
             return None
         address = str(probe.getsockname()[0])
     return None if address.startswith("127.") else address
+
+
+def test_phoenix_has_no_assistant_and_no_shell_to_run(tmp_path: Path) -> None:
+    folder = tmp_path / "phoenix"
+    with running_phoenix(folder) as phoenix:
+
+        async def ask_the_assistant() -> int:
+            async with httpx.AsyncClient(trust_env=False) as http:
+                url = f"{phoenix.url}/v1/agent_sessions/made-up/chat"
+                return (await http.post(url, json={})).status_code
+
+        status = asyncio.run(ask_the_assistant())
+    banner = (tmp_path / "phoenix.log").read_text(errors="replace").splitlines()
+
+    # With no assistant route, only the page route has this path, and it
+    # takes no POST. With the assistant on, the route answers 422 to `{}`.
+    assert status == 405
+    for setting in ("Agent assistant", "Server-side bash"):
+        [line] = [line for line in banner if line.strip().startswith(setting)]
+        assert line.rstrip().endswith("Disabled"), line
 
 
 def test_a_hostile_environment_changes_nothing_phoenix_does(tmp_path: Path) -> None:
