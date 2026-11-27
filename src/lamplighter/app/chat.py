@@ -57,6 +57,8 @@ WAITING = (
 )
 LEAVING = "Exiting now. The next start carries on from what is saved."
 LEAVE_CODE = 130
+# The signals that end the chat at once: the terminal closed, or a `kill`.
+_ENDINGS = (signal.SIGHUP, signal.SIGTERM)
 # The command that brings on the wall's self-test before the first message.
 _FIRST_COMMAND = ("/usr/bin/true",)
 _FIRST_COMMAND_MS = 5_000
@@ -175,14 +177,24 @@ async def _serve(
         observers=progress_lines(terminal.show_line),
         running=running,
     )
-    failed = await _talk(session_id, run_spec(config, tooling), deps, terminal)
+    failed = await _talk(
+        session_id, run_spec(config, tooling), deps, terminal, tooling.executor
+    )
     return 0 if failed is None else _refused(failed.message, parts)
 
 
 async def _talk(
-    session_id: str, spec: RunSpec, deps: Deps, terminal: TerminalChannel
+    session_id: str,
+    spec: RunSpec,
+    deps: Deps,
+    terminal: TerminalChannel,
+    executor: Executor,
 ) -> Failure | None:
-    """Run the intake and the driver, with Ctrl-C handled, until both end."""
+    """Run the intake and the driver, with Ctrl-C handled, until both end.
+
+    A closed terminal or a plain `kill` ends the process at once, as a
+    second Ctrl-C does, once the commands still running are killed.
+    """
     wake = Wake()
 
     async def stop() -> None:
@@ -193,10 +205,16 @@ async def _talk(
             terminal.show_line(stopped.message)
 
     keys = CtrlC(
-        session_id, deps.running, stop, wake.end_input, lambda: leave_now(terminal)
+        session_id,
+        deps.running,
+        stop,
+        wake.end_input,
+        lambda: leave_now(terminal, executor),
     )
     loop = asyncio.get_running_loop()
     loop.add_signal_handler(signal.SIGINT, keys.pressed)
+    for ending in _ENDINGS:
+        loop.add_signal_handler(ending, _ended_by, ending, executor)
     try:
         intake = asyncio.ensure_future(
             run_intake(terminal, deps.inbox, deps.running, wake.wake, wake.end_input)
@@ -210,20 +228,29 @@ async def _talk(
             intake.cancel()
         await asyncio.wait([intake])
     finally:
-        loop.remove_signal_handler(signal.SIGINT)
+        for handled in (signal.SIGINT, *_ENDINGS):
+            loop.remove_signal_handler(handled)
     if driven is not None:
         return driven
     return None if intake.cancelled() else intake.result()
 
 
-def leave_now(terminal: TerminalChannel) -> NoReturn:
-    """Say so and leave at once, with no clean-up that could hang.
+def leave_now(terminal: TerminalChannel, executor: Executor) -> NoReturn:
+    """Say so, kill the commands, and leave at once, with no clean-up that could hang.
 
     The saved state needs none: leaving here is the same as a kill, and the
-    next start carries on from what is saved.
+    next start carries on from what is saved. A command is in a session of
+    its own, so nothing else would end it.
     """
     terminal.show_line(LEAVING)
+    executor.kill_all()
     os._exit(LEAVE_CODE)
+
+
+def _ended_by(ending: signal.Signals, executor: Executor) -> NoReturn:
+    # The terminal may be gone, so nothing is shown.
+    executor.kill_all()
+    os._exit(128 + ending)
 
 
 async def _waiting_elsewhere(

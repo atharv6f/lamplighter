@@ -26,6 +26,11 @@ _CHUNK = 65_536
 type _Why = Literal["exited", "full", "time", "cancel"]
 type FirstCheck = Callable[[], Awaitable[Failure | None]]
 
+# Every command this process runs now. Each is in a session of its own,
+# which no signal of the terminal reaches, so a harness that leaves at once
+# must kill them itself.
+_RUNNING: set[asyncio.subprocess.Process] = set()
+
 
 @dataclass
 class _Capture:
@@ -124,6 +129,7 @@ async def _work(
         raise
     finally:
         os.close(write_end)
+    _RUNNING.add(process)
     capture = _Capture(limit=capture_bytes, kept=bytearray())
     full, ended = asyncio.Event(), asyncio.Event()
     os.set_blocking(read_end, False)
@@ -141,9 +147,19 @@ async def _work(
         # killed and reaped, its id may belong to another group.
         if not killed:
             _kill_group(process)
+        _RUNNING.discard(process)
         loop.remove_reader(read_end)
         os.close(read_end)
     return _result(process.returncode, why, capture)
+
+
+def kill_every_command() -> None:
+    """Kill the group of every command still running, at once and without waiting.
+
+    For a harness about to leave. Each run still ends as a kill would end it.
+    """
+    for process in list(_RUNNING):
+        _kill_group(process)
 
 
 def _read(

@@ -144,7 +144,20 @@ KILLED: dict[str, tuple[Turn, ...]] = {
 }
 
 
+# A command that outlives the test unless something kills it, with a child
+# of its own. It writes both process ids where the test can read them.
+LONG_COMMAND = "sleep 30 & echo $$ $! > pids.txt; wait"
+
+
 _NOTE = re.compile(r"Make note (\d+)\.")
+
+
+def _long_command(request: ModelRequest) -> Turn:
+    """Run the long command, then say so once it ends."""
+    _, after = last_said(request)
+    if after:
+        return _text("The command ended.")
+    return _calls(_tool("c1", "shell", command=LONG_COMMAND))
 
 
 def note_name(number: int) -> str:
@@ -220,6 +233,7 @@ BEHAVIOURS = {
     "notes": Behaviour(
         make_notes, model_seconds=0.15, groups=note_arrivals, tools="direct"
     ),
+    "long_command": Behaviour(_long_command, tools="direct"),
     "walled_notes": Behaviour(
         make_notes, model_seconds=0.15, groups=note_arrivals, tools="walled"
     ),

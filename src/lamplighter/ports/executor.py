@@ -72,6 +72,9 @@ class Executor(Protocol):
       argument or variable that holds a zero byte or is not UTF-8.
     - `wall()` gives the same record of plain values for the life of the
       process, saying which wall this is.
+    - After `kill_all()`, no command that a `run` in this process started is
+      alive. It does not wait, so a harness may call it just before it
+      leaves at once.
     """
 
     async def run(self, command: Command) -> ExecResult | Failure:
@@ -80,6 +83,10 @@ class Executor(Protocol):
 
     def wall(self) -> JsonObject:
         """Give the record of the wall the commands run behind."""
+        ...
+
+    def kill_all(self) -> None:
+        """Kill every command still running, at once."""
         ...
 
 

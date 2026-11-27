@@ -7,7 +7,7 @@ can never be built with it.
 
 from pathlib import Path
 
-from lamplighter.adapters.command_run import run_command
+from lamplighter.adapters.command_run import kill_every_command, run_command
 from lamplighter.ports import (
     Clock,
     Command,
@@ -43,6 +43,10 @@ class DirectExecutor:
 
     def wall(self) -> JsonObject:
         return {"adapter": "direct"}
+
+    def kill_all(self) -> None:
+        """Kill every command still running, at once."""
+        kill_every_command()
 
 
 async def _no_wall() -> Failure | None:

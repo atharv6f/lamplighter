@@ -28,6 +28,7 @@ class FakeExecutor:
         self._work = work.resolve()
         self._answer = answer
         self.commands: list[Command] = []
+        self.killed_all = 0
 
     async def run(self, command: Command) -> ExecResult | Failure:
         """Note the command, then refuse it or give its answer."""
@@ -40,3 +41,7 @@ class FakeExecutor:
     def wall(self) -> JsonObject:
         """Say that there is no wall."""
         return {"adapter": "fake"}
+
+    def kill_all(self) -> None:
+        """Note that every command was to be killed. None runs, so none is."""
+        self.killed_all += 1

@@ -6,7 +6,7 @@ import platform
 import sys
 from pathlib import Path
 
-from lamplighter.adapters.command_run import run_command
+from lamplighter.adapters.command_run import kill_every_command, run_command
 from lamplighter.adapters.seatbelt.profile import PROFILES, profiles_sha256
 from lamplighter.ports import (
     Clock,
@@ -68,6 +68,10 @@ class SeatbeltExecutor:
     def wall(self) -> JsonObject:
         """Give the record that names this wall, the same for the process's life."""
         return dict(self._wall)
+
+    def kill_all(self) -> None:
+        """Kill every command still running, at once."""
+        kill_every_command()
 
     def _prefix(self, profile: Profile) -> list[str]:
         return [

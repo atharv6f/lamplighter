@@ -248,6 +248,31 @@ def test_no_process_of_the_group_is_alive_after_a_cancel(
     assert not is_alive(int((work / "pid").read_text()))
 
 
+def test_kill_all_kills_every_group_at_once_and_each_run_still_ends(
+    executor: Executor, work: Path
+) -> None:
+    script = "sleep 30 & echo $! > pid; sleep 30"
+    folders = (work / "a", work / "b")
+    for folder in folders:
+        folder.mkdir()
+
+    async def scene() -> list[ExecResult | Failure]:
+        runs = [
+            executor.run(command(folder, "/bin/sh", "-c", script)) for folder in folders
+        ]
+        tasks = [asyncio.ensure_future(one) for one in runs]
+        for task, folder in zip(tasks, folders, strict=True):
+            await until_the_pid_or_the_end(task, folder)
+        executor.kill_all()
+        return await asyncio.wait_for(asyncio.gather(*tasks), 5)
+
+    for ended, folder in zip(run(scene()), folders, strict=True):
+        result = result_of(ended)
+        assert result.signal == signal.SIGKILL
+        assert not (result.cancelled or result.timed_out)
+        assert not is_alive(int((folder / "pid").read_text()))
+
+
 def test_no_process_of_the_group_is_alive_after_the_time_limit(
     executor: Executor, work: Path
 ) -> None:

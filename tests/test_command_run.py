@@ -139,8 +139,9 @@ def test_a_loop_that_shuts_down_during_a_command_kills_it_and_ends(
 ) -> None:
     # The loop's shutdown cancels every task, the work's own as well as the
     # caller's. A runner that waited on the work then would wait for ever.
-    pid = tmp_path / "pid"
-    line = f"echo $$ > {pid}; exec /bin/sleep 30"
+    pid, child = tmp_path / "pid", tmp_path / "child"
+    # A child in the background, so the whole group must be killed.
+    line = f"/bin/sleep 30 & echo $! > {child}; echo $$ > {pid}; wait"
 
     async def scene() -> None:
         asyncio.ensure_future(
@@ -171,3 +172,4 @@ def test_a_loop_that_shuts_down_during_a_command_kills_it_and_ends(
     runner.join(timeout=10)
     assert ended == ["ended"]
     assert not is_alive(int(pid.read_text()))
+    assert not is_alive(int(child.read_text()))

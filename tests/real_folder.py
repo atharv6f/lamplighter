@@ -228,3 +228,6 @@ class _StartsNoted:
 
     def wall(self) -> JsonObject:
         return self._inner.wall()
+
+    def kill_all(self) -> None:
+        self._inner.kill_all()
