@@ -263,6 +263,21 @@ def test_a_small_packed_body_stops_at_the_limit_when_unpacked(work: Path) -> Non
     assert len(text) < 5_242_880 + 200
 
 
+def test_a_packed_body_stops_at_the_limit_read_from_the_network(work: Path) -> None:
+    # Bytes after the end of the packed stream unpack to nothing, so only
+    # the count of bytes read can stop them.
+    body = gzip.compress(b"made-up") + b"\0" * 1_000
+    net = Net(
+        pages={
+            "https://example.test/a": page(body=body, kind="text/plain", packed="gzip")
+        }
+    )
+    cut = fetch(work, net, "https://example.test/a", fetch_max_bytes=100)
+    assert cut.text.endswith(
+        "\n\nmade-up\n[The page was longer than 100 bytes. This is its start.]"
+    )
+
+
 def test_deflate_is_unpacked_and_other_packing_is_refused(work: Path) -> None:
     net = Net(
         pages={
