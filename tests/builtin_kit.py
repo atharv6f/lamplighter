@@ -11,6 +11,7 @@ from lamplighter.adapters import SystemClock
 from lamplighter.adapters.builtin_tools import BuiltinTools, ToolSettings, WebAccess
 from lamplighter.adapters.in_memory import InMemoryBlobStore
 from lamplighter.ports import (
+    BlobStore,
     Clock,
     Executor,
     Failure,
@@ -56,15 +57,16 @@ def tools_on(
     executor: Executor | None = None,
     clock: Clock | None = None,
     web: WebAccess = NO_WEB,
+    blobs: BlobStore | None = None,
 ) -> BuiltinTools:
-    """The built-in tools on `work`, with old copies kept in memory.
+    """The built-in tools on `work`, with blobs kept in memory.
 
     Commands run on the direct executor and time is the system's, unless
     others are given.
     """
     return BuiltinTools(
         settings_for(work, cap),
-        InMemoryBlobStore(16_000_000),
+        blobs or InMemoryBlobStore(16_000_000),
         executor or DirectExecutor(work, SystemClock()),
         clock or SystemClock(),
         web,

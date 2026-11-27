@@ -6,6 +6,7 @@ from collections.abc import Callable
 from lamplighter.adapters.builtin_tools import (
     edit_file,
     read_file,
+    read_output,
     search_files,
     shell,
     web_fetch,
@@ -52,7 +53,7 @@ class BuiltinTools:
         clock: Clock,
         web: web_fetch.WebAccess,
     ) -> None:
-        """Work as the settings say. Keep old copies in `blobs`."""
+        """Work as the settings say. Keep old copies and read cut results in `blobs`."""
         self._settings = settings
         self._work = open_work_folder(settings.work_dir)
         self._blobs = blobs
@@ -63,6 +64,7 @@ class BuiltinTools:
             sorted(
                 (
                     self._entry(read_file.SPEC, "read"),
+                    self._entry(read_output.SPEC, "read", taints=True),
                     self._entry(search_files.SPEC, "read"),
                     self._entry(write_file.SPEC, "reversible_write"),
                     self._entry(edit_file.SPEC, "reversible_write"),
@@ -81,6 +83,8 @@ class BuiltinTools:
 
     async def call(self, name: str, arguments: JsonObject) -> ToolResult | Failure:
         """Run a read: a file in a worker thread, or a search behind the wall."""
+        if name == "read_output":
+            return await read_output.read_output(self._blobs, arguments)
         if name == "read_file":
             cap = self._settings.output_cap_chars
             return await asyncio.to_thread(
