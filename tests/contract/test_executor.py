@@ -195,7 +195,9 @@ def test_a_link_inside_the_work_folder_that_leads_out_is_refused(
     any_executor: Executor, work: Path, tmp_path: Path
 ) -> None:
     (work / "out").symlink_to(tmp_path)
-    refused = run(any_executor.run(command(work, "/bin/true", cwd=str(work / "out"))))
+    refused = run(
+        any_executor.run(command(work, "/usr/bin/true", cwd=str(work / "out")))
+    )
     assert isinstance(refused, Failure) and refused.kind == "invalid_input"
 
 
@@ -204,8 +206,8 @@ def test_an_empty_command_and_limits_below_one_are_refused(
 ) -> None:
     for bad in (
         command(work),
-        command(work, "/bin/true", wall_ms=0),
-        command(work, "/bin/true", capture_bytes=0),
+        command(work, "/usr/bin/true", wall_ms=0),
+        command(work, "/usr/bin/true", capture_bytes=0),
     ):
         refused = run(any_executor.run(bad))
         assert isinstance(refused, Failure) and refused.kind == "invalid_input", bad
@@ -216,7 +218,7 @@ def test_a_folder_inside_the_work_folder_is_allowed(
 ) -> None:
     (work / "inner").mkdir()
     result_of(
-        run(any_executor.run(command(work, "/bin/true", cwd=str(work / "inner"))))
+        run(any_executor.run(command(work, "/usr/bin/true", cwd=str(work / "inner"))))
     )
 
 

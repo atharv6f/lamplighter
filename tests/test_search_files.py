@@ -64,7 +64,9 @@ def test_no_match_and_a_pattern_grep_refuses(work: Path) -> None:
     refused = search(work, pattern="(")
     assert refused.is_error
     assert refused.text.startswith("The search failed: ")
-    assert "(" in refused.text.removeprefix("The search failed: ")
+    # GNU grep names the pattern and the Mac's grep does not, but both say
+    # it was grep that refused.
+    assert "grep: " in refused.text.removeprefix("The search failed: ")
 
 
 def test_a_long_line_is_given_up_to_five_hundred_characters(work: Path) -> None:

@@ -12,7 +12,6 @@ import asyncio
 import os
 import random
 import re
-import signal
 import sqlite3
 import subprocess
 import sys
@@ -39,6 +38,7 @@ from tests.chat_child import (
 )
 from tests.chat_kit import Outcome
 from tests.crash.folder_checks import folder_wrong
+from tests.group_kill import kill_group
 from tests.kill_kit import broken_rules
 
 ROOT = Path(__file__).parents[2]
@@ -112,7 +112,7 @@ def _kill_and_finish(
             killed += 1
             continue
         finally:
-            _kill(child)
+            kill_group(child)
         assert code == 0, _errors(child)
         if finishing:
             return killed, starts, groups
@@ -132,12 +132,6 @@ def _start(
             stderr=subprocess.PIPE,
             start_new_session=True,
         )
-
-
-def _kill(child: subprocess.Popen[bytes]) -> None:
-    if child.poll() is None:
-        os.killpg(child.pid, signal.SIGKILL)
-    child.wait()
 
 
 def _errors(child: subprocess.Popen[bytes]) -> str:

@@ -20,6 +20,7 @@ from lamplighter.app.chat import LEAVE_CODE, LEAVING, leave_now
 from lamplighter.ports import ExecResult
 from tests.contract.test_executor import is_alive
 from tests.fake_clock import FakeClock
+from tests.group_kill import kill_group
 from tests.pty_terminal import SECONDS, piped
 
 
@@ -30,14 +31,14 @@ def chat(tmp_path: Path) -> Iterator[subprocess.Popen[bytes]]:
     try:
         yield child
     finally:
-        if child.poll() is None:
-            os.killpg(child.pid, signal.SIGKILL)
-        child.wait()
+        kill_group(child)
         written = tmp_path / "store-work" / "pids.txt"
         if written.exists():
             # The shell leads the command's own process group.
             shell, _ = written.read_text().split()
-            with contextlib.suppress(ProcessLookupError):
+            # A group already gone, or on macOS one whose processes are all
+            # on their way out, refuses the signal, and either is fine here.
+            with contextlib.suppress(ProcessLookupError, PermissionError):
                 os.killpg(int(shell), signal.SIGKILL)
 
 

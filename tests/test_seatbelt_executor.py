@@ -122,7 +122,7 @@ def test_a_missing_sandbox_exec_is_unavailable(
     folders: Folders, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(executor, "SANDBOX_EXEC", str(folders.stand_in / "missing"))
-    failed = asyncio.run(folders.executor().run(command(folders.work, "/bin/true")))
+    failed = asyncio.run(folders.executor().run(command(folders.work, "/usr/bin/true")))
     assert isinstance(failed, Failure) and failed.kind == "unavailable"
     assert "and it is not there" in failed.message
     assert folders.calls() == []
@@ -166,9 +166,9 @@ def test_the_self_test_runs_once_for_many_commands(folders: Folders) -> None:
 
     async def scene() -> None:
         await asyncio.gather(
-            *(wall.run(command(folders.work, "/bin/true")) for _ in range(3))
+            *(wall.run(command(folders.work, "/usr/bin/true")) for _ in range(3))
         )
-        await wall.run(command(folders.work, "/bin/true"))
+        await wall.run(command(folders.work, "/usr/bin/true"))
 
     asyncio.run(scene())
     assert len(folders.calls()) == 3 + 4
@@ -210,7 +210,7 @@ def test_a_wall_that_fails_its_self_test_runs_nothing_ever_again(
 
 def test_a_failed_self_test_logs_what_sandbox_exec_said(folders: Folders) -> None:
     folders.mode("broken")
-    failed = asyncio.run(folders.executor().run(command(folders.work, "/bin/true")))
+    failed = asyncio.run(folders.executor().run(command(folders.work, "/usr/bin/true")))
     assert isinstance(failed, Failure)
     assert failed.detail == {
         "exit_code": 65,
@@ -222,7 +222,7 @@ def test_a_failed_self_test_logs_what_sandbox_exec_said(folders: Folders) -> Non
 
 def test_a_wall_that_lists_the_store_fails_its_self_test(folders: Folders) -> None:
     folders.mode("lists")
-    failed = asyncio.run(folders.executor().run(command(folders.work, "/bin/true")))
+    failed = asyncio.run(folders.executor().run(command(folders.work, "/usr/bin/true")))
     assert isinstance(failed, Failure)
     assert f"a listing of {folders.state.resolve()} was not refused" in failed.message
 
@@ -255,7 +255,7 @@ def test_a_cancel_during_the_self_test_still_gives_a_result_and_keeps_the_wall(
 def test_a_command_outside_the_work_folder_is_refused_before_the_self_test(
     folders: Folders, tmp_path: Path
 ) -> None:
-    failed = asyncio.run(folders.executor().run(command(tmp_path, "/bin/true")))
+    failed = asyncio.run(folders.executor().run(command(tmp_path, "/usr/bin/true")))
     assert isinstance(failed, Failure) and failed.kind == "invalid_input"
     assert folders.calls() == []
 
@@ -301,7 +301,7 @@ def test_a_wall_whose_store_command_never_ends_fails_its_self_test(
     # A command killed at its time limit refused nothing.
     folders.mode("stalls")
     monkeypatch.setattr(executor, "SELF_TEST_MS", 500)
-    failed = asyncio.run(folders.executor().run(command(folders.work, "/bin/true")))
+    failed = asyncio.run(folders.executor().run(command(folders.work, "/usr/bin/true")))
     assert isinstance(failed, Failure)
     assert f"a write to {folders.state.resolve()} was not refused" in failed.message
 
@@ -317,7 +317,7 @@ def test_what_a_command_left_at_the_test_name_is_cleared_first(
         name.symlink_to(folders.state)
     else:
         name.mkdir()
-    ran = asyncio.run(folders.executor().run(command(folders.work, "/bin/true")))
+    ran = asyncio.run(folders.executor().run(command(folders.work, "/usr/bin/true")))
     assert isinstance(ran, ExecResult) and ran.exit_code == 0, ran
     assert list((folders.scratch / "tmp").iterdir()) == []
     assert list(folders.state.iterdir()) == []
@@ -331,7 +331,7 @@ def test_a_folder_with_files_at_the_test_name_stops_the_wall_and_raises_nothing(
     (name / "inside").write_text("made-up")
     wall = folders.executor()
     for _ in range(2):
-        failed = asyncio.run(wall.run(command(folders.work, "/bin/true")))
+        failed = asyncio.run(wall.run(command(folders.work, "/usr/bin/true")))
         assert isinstance(failed, Failure)
         assert (failed.kind, failed.effect) == ("unavailable", "none")
         assert failed.message == (
