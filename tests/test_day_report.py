@@ -175,6 +175,18 @@ def test_a_day_whose_replies_all_have_a_cost_gives_the_dollars_alone() -> None:
     assert "Cost: $2.500000" in report(log.events)
 
 
+def test_a_run_with_no_saved_reply_has_no_price_and_its_day_costs_nothing() -> None:
+    log = MadeUpLog()
+    run = one_run(log)
+    run.request()
+    run.end("failed", "model_timeout")
+
+    lines = report(log.events)
+    assert "Cost: $0.000000" in lines
+    [run_line] = [line for line in lines if " session " in line]
+    assert ", 1 step, 0 tool calls, cache none, no price, session " in run_line
+
+
 def test_a_reported_name_that_fails_the_check_is_shown_as_unknown() -> None:
     marker = "made up; rm -rf"
     log = MadeUpLog()

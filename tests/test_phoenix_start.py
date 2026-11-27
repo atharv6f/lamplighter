@@ -29,6 +29,7 @@ HOSTILE = {
     "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:9",
     "PYTHONPATH": "{tmp}",
     "HTTPS_PROXY": "http://127.0.0.1:9",
+    "CDPATH": "{tmp}",
 }
 
 
@@ -90,6 +91,8 @@ def test_with_no_arguments_the_folder_is_in_home_and_the_ports_are_the_usual(
 def test_a_relative_folder_is_taken_from_where_the_caller_is(tmp_path: Path) -> None:
     caller = tmp_path / "caller"
     caller.mkdir()
+    # A folder of the same name where the hostile CDPATH points.
+    (tmp_path / "here").mkdir()
     given, _, _ = started(tmp_path, ["here"], cwd=caller)
 
     assert given["PHOENIX_WORKING_DIR"] == str((caller / "here").resolve())

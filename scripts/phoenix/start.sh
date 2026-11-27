@@ -3,6 +3,8 @@
 # With no arguments it uses ~/.lamplighter-phoenix and the usual two ports.
 # The tests pass a folder and two ports of their own.
 set -eu
+# A CDPATH from the caller would let `cd` below go to another folder.
+unset CDPATH
 folder="${1:-${HOME}/.lamplighter-phoenix}"
 mkdir -p "$folder"
 chmod 700 "$folder"

@@ -648,12 +648,23 @@ class AnsweringSink:
         return await self.answer(spans)
 
 
-def two_lines(screen: Screen, keyboard: Keyboard, before_second: str) -> None:
-    """Type a line, wait for `before_second` too, type another, end the input."""
+def two_lines(
+    screen: Screen,
+    keyboard: Keyboard,
+    before_second: str,
+    before_the_end: Callable[[], bool] = lambda: True,
+) -> None:
+    """Type a line, wait for `before_second` too, type another, end the input.
+
+    The input ends once `before_the_end` holds, or after ten seconds.
+    """
     keyboard.type(b"Hello.\n")
     if screen.wait_for("Answer 1.") and screen.wait_for(before_second):
         keyboard.type(b"Again.\n")
         screen.wait_for("Answer 2.")
+    deadline = time.monotonic() + 10
+    while not before_the_end() and time.monotonic() < deadline:
+        time.sleep(0.02)
     keyboard.close()
 
 
@@ -696,7 +707,9 @@ def test_a_trace_store_down_for_the_whole_chat_is_told_once_and_changes_no_reply
         tmp_path / "down",
         keyboard,
         session="sess-a",
-        person=lambda shown: two_lines(shown, keyboard, "Spans are not"),
+        person=lambda shown: two_lines(
+            shown, keyboard, "Spans are not", lambda: sink.exports >= 2
+        ),
         sink=sink,
         cursor=cursor,
     )
@@ -711,7 +724,8 @@ def test_a_trace_store_down_for_the_whole_chat_is_told_once_and_changes_no_reply
     assert (code, errors) == (0, "")
     assert screen.count(NOT_SENT.format(message=DOWN.message)) == 1
     assert replies(screen) == replies(plain_screen) == ["Answer 1.", "Answer 2."]
-    assert sink.exports >= 2
+    # Two failed passes while the chat was open, and the last passes.
+    assert sink.exports >= 3
     assert cursor_at(cursor) == 0
 
 

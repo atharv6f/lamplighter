@@ -189,10 +189,12 @@ class DayReport:
         self._ended[reason] += 1
         if reason in ("failed", "limit"):
             self._errors[f"run {how}"] += 1
+        # A run whose calls were all cut off may still have been billed.
+        cost = _cost(run.replies) if run.replies.calls else "no price"
         self._run_lines.append(
             f"{ended.at[11:19]} {how}, {_counted(run.steps, 'step')},"
             f" {_counted(run.tool_calls, 'tool call')}, cache {_rate(run.replies)},"
-            f" {_cost(run.replies)}, session {ended.session_id} run {ended.run_id}"
+            f" {cost}, session {ended.session_id} run {ended.run_id}"
         )
 
 

@@ -129,7 +129,7 @@ def _kill_and_finish(
             kill_group(child)
         if code is None:
             killed += 1
-            wrong = asyncio.run(_spans_wrong(store, finish=False))
+            wrong = asyncio.run(_spans_wrong(store))
             assert wrong == [], wrong
             continue
         assert code == 0, _errors(child)
@@ -171,7 +171,7 @@ def _checked(
     wrong = broken_rules(ended, started, messages)
     wrong += shown_in_order(ended, screen.read_text())
     by_the_chat = len({span.span_id for span in spans_in(store / SPANS_SENT)})
-    wrong += asyncio.run(_spans_wrong(store, finish=True))
+    wrong += asyncio.run(_spans_wrong_at_the_end(store))
     assert wrong == [], wrong
     spans = len({span.span_id for span in spans_in(store / SPANS_SENT)})
     return ChatKillRun(
@@ -179,30 +179,48 @@ def _checked(
     )
 
 
-async def _spans_wrong(store: Path, finish: bool) -> list[str]:
-    """Check the spans the child sent against the log's.
+async def _spans_wrong(store: Path) -> list[str]:
+    """Check the spans the child sent against the log's, after a kill.
 
     Every span whole at or below the cursor's position must have been sent,
-    and every copy sent must equal the span the log gives. With `finish`,
-    a projector first sends what is left, and then every span of the log
-    must have been sent, as many as the log promises, and no other.
+    and every copy sent must equal the span the log gives.
+    """
+    events, pos = await _log_and_mark(store)
+    return _copies_wrong(events, pos, store / SPANS_SENT)
+
+
+async def _spans_wrong_at_the_end(store: Path) -> list[str]:
+    """Send what is left with a projector, then check every span of the log.
+
+    On top of the checks after a kill, every span of the log must have been
+    sent, as many as the log promises, and no other.
     """
     connection = open_database(store / "state.db", 5.0)
     assert not isinstance(connection, Failure), connection
     try:
         log = SqliteEventLog(connection, {}, 200_000)
         cursor, sink = span_cursor(store), SpanFileSink(store / SPANS_SENT)
-        if finish:
-            wrong = await _sent_to_the_end(TraceProjector(log, sink, cursor))
-            if wrong:
-                return wrong
-        events = await log.tail(0, _WHOLE_LOG)
-        mark = await cursor.read()
+        wrong = await _sent_to_the_end(TraceProjector(log, sink, cursor))
+    finally:
+        connection.close()
+    if wrong:
+        return wrong
+    events, pos = await _log_and_mark(store)
+    sent = store / SPANS_SENT
+    return _copies_wrong(events, pos, sent) + _not_all_sent(events, pos, sent)
+
+
+async def _log_and_mark(store: Path) -> tuple[Sequence[Event], int]:
+    connection = open_database(store / "state.db", 5.0)
+    assert not isinstance(connection, Failure), connection
+    try:
+        events = await SqliteEventLog(connection, {}, 200_000).tail(0, _WHOLE_LOG)
+        mark = await span_cursor(store).read()
     finally:
         connection.close()
     assert not isinstance(events, Failure), events
     assert not isinstance(mark, Failure), mark
-    return _sent_wrong(events, mark.pos, store / SPANS_SENT, finish)
+    return events, mark.pos
 
 
 async def _sent_to_the_end(projector: TraceProjector) -> list[str]:
@@ -215,9 +233,7 @@ async def _sent_to_the_end(projector: TraceProjector) -> list[str]:
     return ["the last projector never finished"]
 
 
-def _sent_wrong(
-    events: Sequence[Event], pos: int, sent_file: Path, finish: bool
-) -> list[str]:
+def _copies_wrong(events: Sequence[Event], pos: int, sent_file: Path) -> list[str]:
     whole = log_spans(events)
     truth = {made.span.span_id: made.span for made in whole}
     passed = {made.span.span_id for made in whole if made.pos <= pos}
@@ -230,15 +246,21 @@ def _sent_wrong(
     ]
     if passed - held:
         wrong.append(f"{len(passed - held)} spans the cursor passed were not sent")
-    if finish:
-        last = events[-1].pos if events else 0
-        if pos != last:
-            wrong.append(f"the cursor ends at {pos}, the log at {last}")
-        if held != truth.keys() or len(held) != promised_spans(events):
-            wrong.append(
-                f"{len(held)} spans sent, the log has {len(truth)}"
-                f" and promises {promised_spans(events)}"
-            )
+    return wrong
+
+
+def _not_all_sent(events: Sequence[Event], pos: int, sent_file: Path) -> list[str]:
+    truth = {made.span.span_id for made in log_spans(events)}
+    held = {span.span_id for span in spans_in(sent_file)}
+    wrong: list[str] = []
+    last = events[-1].pos if events else 0
+    if pos != last:
+        wrong.append(f"the cursor ends at {pos}, the log at {last}")
+    if held != truth or len(held) != promised_spans(events):
+        wrong.append(
+            f"{len(held)} spans sent, the log has {len(truth)}"
+            f" and promises {promised_spans(events)}"
+        )
     return wrong
 
 

@@ -3,6 +3,8 @@
 import asyncio
 import dataclasses
 import io
+import time
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -323,9 +325,23 @@ def test_the_report_reads_the_whole_log_however_long() -> None:
     assert "Runs ended: 300 (300 done)" in lines
 
 
+@pytest.fixture
+def local_date_not_utc(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Put the machine in a zone whose date is not the date in UTC right now."""
+    # At any hour of the UTC day one of these two zones is on another date.
+    far = "Etc/GMT-14" if datetime.now(UTC).hour >= 10 else "Etc/GMT+12"
+    monkeypatch.setenv("TZ", far)
+    time.tzset()
+    yield
+    monkeypatch.undo()
+    time.tzset()
+
+
+@pytest.mark.usefixtures("local_date_not_utc")
 def test_a_report_with_no_day_is_of_the_day_now_in_utc(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    assert datetime.now().date() != datetime.now(UTC).date()
     saved(tmp_path, EVENTS[:3])
     before = datetime.now(UTC).date().isoformat()
     assert main(["--config", settings(tmp_path), "report"]) == 0
