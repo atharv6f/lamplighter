@@ -21,6 +21,7 @@ dev = [
     "pyright>=1.1.414",
     "pytest>=9.2.0",
     "ruff>=0.17.6",
+    "trustme>=1.2.1",
 ]
 
 [tool.ruff.lint]

@@ -205,6 +205,7 @@ KINDS = {
         make=_builtin,
         read=("read_file", {"path": "tea.txt"}),
         bad=("read_file", {"path": 7}),
+        taints=("web_fetch",),
         change=Change(
             call=("write_file", {"path": "tea.txt", "content": "mint\n"}),
             held=("write_file", {"path": "tea.txt", "content": "mint\n"}),

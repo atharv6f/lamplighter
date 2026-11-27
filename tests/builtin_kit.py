@@ -1,13 +1,17 @@
 """What the tests of the built-in tools share: a provider on a temp folder."""
 
 import asyncio
+import socket
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 from lamplighter.adapters import SystemClock
-from lamplighter.adapters.builtin_tools import BuiltinTools, ToolSettings
+from lamplighter.adapters.builtin_tools import BuiltinTools, ToolSettings, WebAccess
 from lamplighter.adapters.in_memory import InMemoryBlobStore
 from lamplighter.ports import (
+    Clock,
     Executor,
     Failure,
     JsonObject,
@@ -29,22 +33,41 @@ def settings_for(work: Path, cap: int = CAP) -> ToolSettings:
         shell_default_seconds=120,
         shell_max_seconds=600,
         output_cap_chars=cap,
+        fetch_max_bytes=5_242_880,
+        fetch_seconds=30,
     )
+
+
+async def _no_name(host: str, port: int) -> tuple[str, ...]:
+    raise socket.gaierror(socket.EAI_NONAME, "made-up: no network in tests")
+
+
+def _no_answer(request: httpx.Request) -> httpx.Response:
+    raise httpx.ConnectError("made-up: no network in tests", request=request)
+
+
+# A network that finds no name, so no test reaches the real one by mistake.
+NO_WEB = WebAccess(resolve=_no_name, transport=lambda: httpx.MockTransport(_no_answer))
 
 
 def tools_on(
     work: Path,
     cap: int = CAP,
     executor: Executor | None = None,
+    clock: Clock | None = None,
+    web: WebAccess = NO_WEB,
 ) -> BuiltinTools:
     """The built-in tools on `work`, with old copies kept in memory.
 
-    Commands run on the direct executor, unless another is given.
+    Commands run on the direct executor and time is the system's, unless
+    others are given.
     """
     return BuiltinTools(
         settings_for(work, cap),
         InMemoryBlobStore(16_000_000),
         executor or DirectExecutor(work, SystemClock()),
+        clock or SystemClock(),
+        web,
     )
 
 

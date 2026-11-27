@@ -8,6 +8,7 @@ from lamplighter.adapters.builtin_tools import (
     read_file,
     search_files,
     shell,
+    web_fetch,
     write_file,
 )
 from lamplighter.adapters.builtin_tools.file_change import file_check
@@ -16,6 +17,7 @@ from lamplighter.adapters.builtin_tools.work_paths import open_work_folder
 from lamplighter.ports import (
     ActionClass,
     BlobStore,
+    Clock,
     Executor,
     Failure,
     JsonObject,
@@ -47,12 +49,16 @@ class BuiltinTools:
         settings: ToolSettings,
         blobs: BlobStore,
         executor: Executor,
+        clock: Clock,
+        web: web_fetch.WebAccess,
     ) -> None:
         """Work as the settings say. Keep old copies in `blobs`."""
         self._settings = settings
         self._work = open_work_folder(settings.work_dir)
         self._blobs = blobs
         self._executor = executor
+        self._clock = clock
+        self._web = web
         self._entries = tuple(
             sorted(
                 (
@@ -61,6 +67,7 @@ class BuiltinTools:
                     self._entry(write_file.SPEC, "reversible_write"),
                     self._entry(edit_file.SPEC, "reversible_write"),
                     self._entry(shell.shell_spec(settings), "irreversible"),
+                    self._entry(web_fetch.SPEC, "read", taints=True),
                 ),
                 key=lambda entry: entry.spec.name,
             )
@@ -82,6 +89,10 @@ class BuiltinTools:
         if name == "search_files":
             return await search_files.search_files(
                 self._settings, self._executor, arguments
+            )
+        if name == "web_fetch":
+            return await web_fetch.web_fetch(
+                self._settings, self._web, self._clock, arguments
             )
         return _no_tool(name, "reads")
 
