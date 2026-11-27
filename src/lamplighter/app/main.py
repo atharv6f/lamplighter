@@ -36,6 +36,7 @@ from lamplighter.adapters.sqlite import (
     store_sizes,
 )
 from lamplighter.app.chat import OFF_THIS_MAC, ChatParts, Stores, Tooling, chat
+from lamplighter.app.code_revision import REPO_ROOT, code_revision
 from lamplighter.app.config import Config, load_config
 from lamplighter.app.report import day_lines
 from lamplighter.app.traces import export_spans, reset_cursor
@@ -171,6 +172,7 @@ def _chat(config: Config, session_id: str | None) -> int:
         sys.stdin.fileno(),
         sys.stdout,
         sys.stderr,
+        code_revision(REPO_ROOT),
     )
     return chat(config, session_id, parts)
 
@@ -198,11 +200,12 @@ def chat_parts(
     reader: int,
     writer: TextIO,
     errors: TextIO,
+    revision: str,
 ) -> ChatParts:
     """Build a chat on the SQLite store and a terminal that reads `reader`.
 
     The chat sends the spans of its log to `sink`, and keeps how far it got
-    in `cursor`.
+    in `cursor`. Every run saves `revision` as the code that made it.
     """
     clock = SystemClock()
     ids = SystemIds()
@@ -224,6 +227,7 @@ def chat_parts(
         errors,
         sink,
         cursor,
+        revision,
     )
 
 

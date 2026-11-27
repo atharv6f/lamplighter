@@ -1,8 +1,8 @@
-"""The config id: one hash over the model, prices, run, tools, their settings, wall."""
+"""The config ids: one hash over the six parts of a run, and one without its place."""
 
 import dataclasses
 
-from lamplighter.core import Prices, RunSettings, config_id
+from lamplighter.core import Prices, RunSettings, config_id, portable_config_id
 from lamplighter.ports import JsonObject, ModelProfile, ToolEntry, ToolSpec
 
 MODEL = ModelProfile(
@@ -51,6 +51,9 @@ WALL: JsonObject = {"adapter": "seatbelt", "profile_sha256": "a" * 64}
 # sha256sum on that text, and pinned here, so a change to how the id is
 # made shows up as a change to this value.
 PINNED = "4f06cb3ccacebcf2374bf501d738ce6a1c2ad95b9e5126b499b8df1c29a3d839"
+# The portable id of the same five, without the wall and the three
+# settings of where it runs, worked out and checked the same way.
+PORTABLE_PINNED = "00ed0550242f7b636aec8ef3db275d98431345b9c733d7f7b0e0081be1de353e"
 
 
 def made(
@@ -96,3 +99,55 @@ def test_a_change_to_any_of_the_six_gives_another_id() -> None:
 def test_the_same_settings_always_give_the_same_id() -> None:
     again = RunSettings(**dataclasses.asdict(RUN))
     assert made(run=again) == made()
+
+
+def portable(
+    model: ModelProfile = MODEL,
+    prices: Prices = PRICES,
+    run: RunSettings = RUN,
+    tools: tuple[ToolEntry, ...] = (ENTRY,),
+    tool_settings: JsonObject = TOOL_SETTINGS,
+) -> str:
+    return portable_config_id(model, prices, run, tools, tool_settings)
+
+
+def test_the_portable_id_of_known_settings_is_the_pinned_value() -> None:
+    assert portable() == PORTABLE_PINNED
+
+
+def test_one_settings_file_on_two_folders_gives_one_portable_id_and_two_full_ids() -> (
+    None
+):
+    elsewhere: JsonObject = {
+        **TOOL_SETTINGS,
+        "work_dir": "/made-up/trial-2/box/work",
+        "scratch_dir": "/made-up/trial-2/box/scratch",
+    }
+    container: JsonObject = {"adapter": "container", "network": "none"}
+    assert portable(tool_settings=elsewhere) == portable()
+    assert made(tool_settings=elsewhere, wall=container) != made()
+    assert len(portable()) == 64 and portable() != made()
+
+
+def test_the_folders_the_path_and_the_wall_are_not_in_the_portable_id() -> None:
+    for key, value in (
+        ("work_dir", "/made-up/moved"),
+        ("scratch_dir", "/made-up/elsewhere"),
+        ("shell_path", "/usr/local/bin:/usr/bin:/bin"),
+    ):
+        assert portable(tool_settings={**TOOL_SETTINGS, key: value}) == portable()
+
+
+def test_a_change_to_any_of_the_five_gives_another_portable_id() -> None:
+    changed = [
+        portable(model=dataclasses.replace(MODEL, max_output=2_001)),
+        portable(prices=dataclasses.replace(PRICES, output=2)),
+        portable(run=dataclasses.replace(RUN, max_steps=1)),
+        portable(run=dataclasses.replace(RUN, system="Hi.")),
+        portable(tools=()),
+        portable(tools=(dataclasses.replace(ENTRY, taints=True),)),
+        portable(tool_settings={**TOOL_SETTINGS, "shell_default_seconds": 60}),
+        portable(tool_settings={**TOOL_SETTINGS, "fetch_seconds": 31}),
+    ]
+    assert portable() not in changed
+    assert len(set(changed)) == len(changed)

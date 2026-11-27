@@ -37,6 +37,7 @@ from lamplighter.adapters.sqlite import (
     open_database,
 )
 from lamplighter.app.chat import Tooling, run_spec
+from lamplighter.app.code_revision import REPO_ROOT, code_revision
 from lamplighter.app.config import Config, load_config
 from lamplighter.app.main import build_model
 from lamplighter.app.tool_folders import make_tool_folders
@@ -246,7 +247,7 @@ def chat(
         )
         wake = Wake()
         wake.end_input()
-        spec = run_spec(config, Tooling(given, executor))
+        spec = run_spec(config, Tooling(given, executor), code_revision(REPO_ROOT))
         assert await drive(SESSION, spec, deps, channel, wake, lambda: None) is None
 
     async def run_all() -> tuple[Event, ...]:

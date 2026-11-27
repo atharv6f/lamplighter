@@ -1,7 +1,8 @@
 """The rows of the frozen stores of tool calls: every event as the loop writes it.
 
-The text files tests/stores/version_2_tools.sql and
-tests/stores/version_2_tools_with_model.sql were each made once, by running
+The text files tests/stores/version_2_tools.sql,
+tests/stores/version_2_tools_with_model.sql and
+tests/stores/version_2_tools_with_revision.sql were each made once, by running
 these chats through the loop of their day on the SQLite adapters and
 dumping the file as SQL. The text files are never edited, and these chats
 are not changed. The test compares the newer file with what the in-memory

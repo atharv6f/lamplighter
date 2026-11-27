@@ -3,7 +3,7 @@
 from lamplighter.core import harness_texts
 from lamplighter.core.arguments_check import unsupported
 from lamplighter.core.chat_session import Wake, drive
-from lamplighter.core.config_id import config_id
+from lamplighter.core.config_id import config_id, portable_config_id
 from lamplighter.core.cost import Prices, cost_micro_dollars
 from lamplighter.core.day_report import DayReport
 from lamplighter.core.delivery import deliver_due
@@ -71,6 +71,7 @@ __all__ = [
     "fold_reply",
     "harness_texts",
     "pass_to_the_end",
+    "portable_config_id",
     "project_while_open",
     "rebuild_messages",
     "run_intake",

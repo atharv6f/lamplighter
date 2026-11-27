@@ -39,9 +39,17 @@ class RunSpec:
     on `run_started` too, because the hash cannot be read back. `model` and
     `provider` are the names from the model settings, saved on each model
     request, so a call that gets no reply still says which model was asked.
+
+    `portable_config_id` names the same settings on any machine, without
+    the wall and the folders, and `code_revision` names the code that runs:
+    a commit, a commit with a mark for uncommitted changes, or `unknown`.
+    Both are saved on `run_started`, so a run can be traced to the config
+    and the code that made it.
     """
 
     config_id: str
+    portable_config_id: str
+    code_revision: str
     model: str
     provider: str
     system: str

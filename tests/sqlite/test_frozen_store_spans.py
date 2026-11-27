@@ -41,6 +41,7 @@ NO_CONFIG = ["invoke_agent lamplighter lacks lamp.config_id"]
         ("version_2.sql", 22, []),
         ("version_2_tools.sql", 27, []),
         ("version_2_tools_with_model.sql", 27, []),
+        ("version_2_tools_with_revision.sql", 27, []),
     ],
 )
 def test_a_frozen_store_gives_the_spans_its_events_promise(

@@ -45,7 +45,16 @@ from lamplighter.ports import (
 from tests.loop_kit import MAX_RECORD_BYTES, Loop, in_memory
 from tests.model_by_request import ModelByRequest, assistant_turns
 from tests.model_samples import PROFILE
-from tests.run_history import CONFIG, SESSION, SPEC, WALL, inbound, stop
+from tests.run_history import (
+    CONFIG,
+    PORTABLE,
+    REVISION,
+    SESSION,
+    SPEC,
+    WALL,
+    inbound,
+    stop,
+)
 from tests.waiting_clock import JumpingClock
 
 QUESTION = "What time is it, and can you wait two seconds?"
@@ -112,7 +121,9 @@ ASKED = {"deadline_ms": 600_000, "model": "made-up-1", "provider": "made-up"}
 EXPECTED: list[tuple[object, ...]] = [
     (1, "session_started", {"channel": "terminal", "conversation": SESSION},
      None, None, None, None, FIRST_AT),
-    (2, "run_started", {"config_id": CONFIG, "trigger": "message", "wall": WALL},
+    (2, "run_started",
+     {"config_id": CONFIG, "portable_config_id": PORTABLE,
+      "code_revision": REVISION, "trigger": "message", "wall": WALL},
      RUN, None, MESSAGE_ID, None, FIRST_AT),
     (3, "user_message", {"text": QUESTION}, RUN, None, None, None, FIRST_AT),
     (4, "model_request", ASKED, RUN, 1, None, None, FIRST_AT),
