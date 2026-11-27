@@ -314,6 +314,9 @@ def test_a_failure_that_cannot_say_is_unconfirmed_with_what_the_check_found() ->
             "shaky_put failed (transient): The line dropped before the answer came."
         )
         assert payload["harness"] == "unconfirmed"
+        # The harness word says the outcome is not known. The tool's kind
+        # is in the text only, and no failure kind is saved beside it.
+        assert "failure_kind" not in payload
         assert payload["text"] == (
             f"{failure} It could not say whether anything was changed."
             f" {harness_texts.TOOK_EFFECT if lands else harness_texts.NO_EFFECT}"
@@ -341,6 +344,7 @@ def test_a_failure_that_says_it_changed_the_world_has_a_done_row() -> None:
     scene.tools.after_apply = lambda _: lost
     payload = result_of(played(scene))
     assert payload["is_error"] is True
+    assert payload["failure_kind"] == "unavailable"
     assert payload["text"] == harness_texts.tool_failed("put", lost.kind, lost.message)
     assert scene.row.state == "done"
     assert scene.row.result == EffectResult("done", payload)

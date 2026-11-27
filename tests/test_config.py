@@ -5,7 +5,12 @@ from pathlib import Path
 import pytest
 
 from lamplighter.adapters.builtin_tools import ToolSettings
-from lamplighter.app.config import StoreSettings, load_config, store_folder
+from lamplighter.app.config import (
+    StoreSettings,
+    TraceSettings,
+    load_config,
+    store_folder,
+)
 from lamplighter.app.main import build_model
 from lamplighter.core import Prices, RunSettings
 from lamplighter.ports import ModelProfile
@@ -52,6 +57,10 @@ shell_max_seconds = 600
 output_cap_chars = 30_000
 fetch_max_bytes = 5_242_880
 fetch_seconds = 30
+
+[traces]
+phoenix_url = "http://127.0.0.1:6006"
+project = "made-up-project"
 """
 
 
@@ -208,6 +217,21 @@ def test_settings_cannot_be_changed_once_read(tmp_path: Path) -> None:
         ("fetch_seconds = 30\n", "fetch_seconds = 601\n"),
         ("max_blob_bytes = 67_108_864\n", "max_blob_bytes = 26_214_399\n"),
         ("max_record_bytes = 4_194_304\n", "max_record_bytes = 305_535\n"),
+        ("[traces]", "[trace]"),
+        ('project = "made-up-project"\n', ""),
+        ('phoenix_url = "http://127.0.0.1:6006"', 'phoenix_url = ""'),
+        ('phoenix_url = "http://127.0.0.1:6006"', "phoenix_url = 6006"),
+        ('project = "made-up-project"', 'project = ""'),
+        ('project = "made-up-project"', 'project = "Made-up"'),
+        ('project = "made-up-project"', 'project = "UHJvamVjdDox"'),
+        ('project = "made-up-project"', 'project = "1made-up"'),
+        ('project = "made-up-project"', 'project = "-made-up"'),
+        ('project = "made-up-project"', 'project = "made up"'),
+        ('project = "made-up-project"', 'project = "made/up"'),
+        ('project = "made-up-project"', 'project = "made.up"'),
+        ('project = "made-up-project"', 'project = "m\u00e4de-up"'),
+        ('project = "made-up-project"', 'project = "made-up\\n"'),
+        ('project = "made-up-project"', f'project = "{"a" * 65}"'),
     ],
 )
 def test_a_settings_file_that_does_not_fit_is_rejected(
@@ -216,6 +240,36 @@ def test_a_settings_file_that_does_not_fit_is_rejected(
     assert good in GOOD
     with pytest.raises(ValueError):
         load_config(write(tmp_path, GOOD.replace(good, wrong)))
+
+
+def test_the_trace_settings_are_read_as_written(tmp_path: Path) -> None:
+    assert load_config(write(tmp_path, GOOD)).traces == TraceSettings(
+        phoenix_url="http://127.0.0.1:6006", project="made-up-project"
+    )
+
+
+def test_a_settings_file_without_the_trace_section_is_refused(
+    tmp_path: Path,
+) -> None:
+    section = GOOD.index("[traces]")
+    with pytest.raises(ValueError):
+        load_config(write(tmp_path, GOOD[:section]))
+
+
+@pytest.mark.parametrize("project", ["a", "a" * 64, "made_up-9", "z0"])
+def test_a_project_name_at_the_edge_of_the_rule_is_accepted(
+    tmp_path: Path, project: str
+) -> None:
+    text = GOOD.replace('"made-up-project"', f'"{project}"')
+    assert load_config(write(tmp_path, text)).traces.project == project
+
+
+def test_an_address_off_this_mac_is_left_for_the_sink_to_refuse(
+    tmp_path: Path,
+) -> None:
+    text = GOOD.replace("http://127.0.0.1:6006", "http://made-up.example:6006")
+    traces = load_config(write(tmp_path, text)).traces
+    assert traces.phoenix_url == "http://made-up.example:6006"
 
 
 def test_the_tool_settings_are_read_with_the_home_folder_filled_in(
@@ -335,6 +389,12 @@ def test_the_settings_file_in_the_repo_holds_the_first_run_settings() -> None:
     assert (run.max_tokens, run.max_micro_dollars) == (1_000_000, 1_000_000)
     assert (run.model_max_output, run.model_deadline_ms) == (16_000, 600_000)
     assert (run.model_retries, run.cancel_bound_ms) == (2, 800)
+
+
+def test_the_settings_file_in_the_repo_sends_spans_to_a_phoenix_on_this_mac() -> None:
+    assert load_config(SETTINGS).traces == TraceSettings(
+        phoenix_url="http://127.0.0.1:6006", project="lamplighter"
+    )
 
 
 def test_the_builder_gives_a_client_for_the_model_in_the_settings() -> None:

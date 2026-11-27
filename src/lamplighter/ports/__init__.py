@@ -9,6 +9,8 @@ from lamplighter.ports.derived_ids import (
     event_id_for,
     inbound_event_id,
     out_id_for,
+    span_id_for,
+    trace_id_for,
 )
 from lamplighter.ports.effect_check import (
     check_begin,
@@ -102,10 +104,19 @@ from lamplighter.ports.tool_provider import (
     ToolProvider,
     ToolResult,
 )
+from lamplighter.ports.trace_cursor import CursorMark, TraceCursor
+from lamplighter.ports.trace_sink import Span, SpanKind, TraceSink
 from lamplighter.ports.upcast import upcast
 from lamplighter.ports.value_rules import is_hash, is_id
 
 __all__ = [
+    "CursorMark",
+    "Span",
+    "SpanKind",
+    "TraceCursor",
+    "TraceSink",
+    "span_id_for",
+    "trace_id_for",
     "unknown_outbound",
     "check_receipt",
     "check_enqueue",

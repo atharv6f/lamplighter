@@ -3,9 +3,11 @@
 import argparse
 import asyncio
 import os
+import re
 import sqlite3
 import sys
 from collections.abc import Callable, Sequence
+from datetime import date
 from pathlib import Path
 from typing import TextIO
 
@@ -13,12 +15,14 @@ import httpx
 
 from lamplighter.adapters import (
     FileBlobStore,
+    FileTraceCursor,
     SystemClock,
     SystemIds,
     TerminalChannel,
 )
 from lamplighter.adapters.anthropic import AnthropicModel
 from lamplighter.adapters.builtin_tools import BuiltinTools, system_web
+from lamplighter.adapters.phoenix import PhoenixSink, local_address
 from lamplighter.adapters.seatbelt import SeatbeltExecutor
 from lamplighter.adapters.sqlite import (
     SqliteEffectLedger,
@@ -31,18 +35,54 @@ from lamplighter.adapters.sqlite import (
     open_database,
     store_sizes,
 )
-from lamplighter.app.chat import ChatParts, Stores, Tooling, chat
+from lamplighter.app.chat import OFF_THIS_MAC, ChatParts, Stores, Tooling, chat
 from lamplighter.app.config import Config, load_config
-from lamplighter.ports import BlobStore, Clock, Failure, ModelClient
+from lamplighter.app.report import day_lines
+from lamplighter.app.traces import export_spans, reset_cursor
+from lamplighter.core import SPAN_LAYOUT
+from lamplighter.ports import (
+    BlobStore,
+    Clock,
+    Failure,
+    ModelClient,
+    TraceCursor,
+    TraceSink,
+    canonical_json,
+)
 
 NO_KEY = "ANTHROPIC_API_KEY is not set."
 # How long a write waits for another process that holds the store's lock.
 STORE_TIMEOUT_S = 5.0
+_DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 
 
 def build_model(config: Config, api_key: str) -> ModelClient:
     """Build the client for the model the settings name."""
     return AnthropicModel(config.model, api_key, httpx.AsyncClient(), SystemClock())
+
+
+def trace_sink(config: Config, clock: Clock) -> PhoenixSink:
+    """Build the sink for the trace store the settings name.
+
+    The client takes no proxy from the environment, so spans for an
+    address on this Mac can never be routed through another machine.
+    """
+    http = httpx.AsyncClient(trust_env=False, follow_redirects=False)
+    traces = config.traces
+    return PhoenixSink(traces.phoenix_url, traces.project, http, clock)
+
+
+def trace_cursor(config: Config) -> FileTraceCursor:
+    """Build the cursor of the trace store, project and span layout in the settings.
+
+    The target holds the address the loopback rule gives back, or none.
+    The setting itself never goes in: one that fails the rule may hold any
+    text. With no address, every command refuses the sink first, so that
+    cursor is never read or written.
+    """
+    address = local_address(config.traces.phoenix_url) or ""
+    target = canonical_json([address, config.traces.project, SPAN_LAYOUT])
+    return FileTraceCursor(Path(config.store.dir), target)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -54,6 +94,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     config = load_config(args.config)
     if args.command == "chat":
         return _chat(config, args.session)
+    if args.command == "traces":
+        # Refused before the cursor is touched, so none is ever kept for an
+        # address off this Mac.
+        if trace_sink(config, SystemClock()).leaves_this_mac:
+            print(OFF_THIS_MAC, file=sys.stderr)
+            return 1
+        if args.action == "reset":
+            cursor = trace_cursor(config)
+            return asyncio.run(reset_cursor(cursor, sys.stdout, sys.stderr))
     state = Path(config.store.dir) / "state.db"
     # A store command never makes a store, so a mistyped path cannot leave
     # a new empty one behind.
@@ -87,7 +136,22 @@ def _parser() -> argparse.ArgumentParser:
     delete = actions.add_parser("delete", help="export one session, then delete it")
     delete.add_argument("session")
     delete.add_argument("--export-to", type=Path, required=True)
+    traces = commands.add_parser("traces", help="send spans to the trace store")
+    steps = traces.add_subparsers(dest="action", required=True)
+    steps.add_parser("export", help="send every span not yet sent")
+    steps.add_parser("reset", help="send every span again at the next export")
+    report = commands.add_parser("report", help="report one day from the log")
+    report.add_argument("--day", type=_day, help="the day in UTC, as YYYY-MM-DD")
     return parser
+
+
+def _day(text: str) -> str:
+    try:
+        if _DAY.fullmatch(text):
+            return date.fromisoformat(text).isoformat()
+    except ValueError:
+        pass
+    raise argparse.ArgumentTypeError(f"not a day as YYYY-MM-DD: {text!r}")
 
 
 def _chat(config: Config, session_id: str | None) -> int:
@@ -96,9 +160,17 @@ def _chat(config: Config, session_id: str | None) -> int:
         print(NO_KEY, file=sys.stderr)
         return 1
     model = build_model(config, key)
-    tooling = builtin_tooling(config, SystemClock())
+    clock = SystemClock()
+    tooling = builtin_tooling(config, clock)
     parts = chat_parts(
-        config, model, tooling, sys.stdin.fileno(), sys.stdout, sys.stderr
+        config,
+        model,
+        tooling,
+        trace_sink(config, clock),
+        trace_cursor(config),
+        sys.stdin.fileno(),
+        sys.stdout,
+        sys.stderr,
     )
     return chat(config, session_id, parts)
 
@@ -121,11 +193,17 @@ def chat_parts(
     config: Config,
     model: ModelClient,
     tooling: Callable[[BlobStore], Tooling],
+    sink: TraceSink,
+    cursor: TraceCursor,
     reader: int,
     writer: TextIO,
     errors: TextIO,
 ) -> ChatParts:
-    """Build a chat on the SQLite store and a terminal that reads `reader`."""
+    """Build a chat on the SQLite store and a terminal that reads `reader`.
+
+    The chat sends the spans of its log to `sink`, and keeps how far it got
+    in `cursor`.
+    """
     clock = SystemClock()
     ids = SystemIds()
 
@@ -135,7 +213,18 @@ def chat_parts(
     def terminal(session_id: str) -> TerminalChannel:
         return TerminalChannel(session_id, clock, ids, reader, writer)
 
-    return ChatParts(model, tooling, clock, ids, open_stores, terminal, writer, errors)
+    return ChatParts(
+        model,
+        tooling,
+        clock,
+        ids,
+        open_stores,
+        terminal,
+        writer,
+        errors,
+        sink,
+        cursor,
+    )
 
 
 def sqlite_stores(folder: Path, config: Config, clock: Clock) -> Stores | Failure:
@@ -158,6 +247,12 @@ async def _store_command(
     args: argparse.Namespace, config: Config, connection: sqlite3.Connection
 ) -> int:
     clock = SystemClock()
+    log = SqliteEventLog(connection, {}, config.store.max_record_bytes)
+    if args.command == "traces":
+        sink, cursor = trace_sink(config, clock), trace_cursor(config)
+        return await export_spans(log, sink, cursor, clock, sys.stdout, sys.stderr)
+    if args.command == "report":
+        return await _report(log, args.day or clock.now().date().isoformat())
     blobs = FileBlobStore(
         Path(config.store.dir) / "blobs", clock, config.store.max_blob_bytes
     )
@@ -248,6 +343,15 @@ async def _delete(
     )
     if not report.log_cleared:
         print("Another process was busy, so the next start clears the log file.")
+    return 0
+
+
+async def _report(log: SqliteEventLog, day: str) -> int:
+    lines = await day_lines(log, day)
+    if isinstance(lines, Failure):
+        return _failed(lines)
+    for line in lines:
+        print(line)
     return 0
 
 

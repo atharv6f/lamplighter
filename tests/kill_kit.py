@@ -72,8 +72,10 @@ from tests.port_counter import (
     Counter,
     When,
 )
+from tests.projection_checks import quick_wrong
 from tests.real_folder import RealFolder, new_folder
 from tests.run_history import SESSION, SPEC
+from tests.span_checks import spans_wrong
 from tests.waiting_clock import JumpingClock, WaitingClock
 
 type Point = tuple[int, When]
@@ -403,6 +405,7 @@ def what_is_wrong(world: World, scenario: Scenario) -> list[str]:
     stores = ended(world)
     wrong = broken_rules(stores, world.starts, messages) + _replies(stores)
     wrong += changes_wrong(stores.events, world.rows, world.changes)
+    wrong += spans_wrong(stores.events) + quick_wrong(stores.events)
     if world.folder is not None:
         wrong += world.folder.wrong(world.rows)
     return wrong

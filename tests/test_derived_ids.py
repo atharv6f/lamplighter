@@ -1,6 +1,7 @@
 """The examples here are pinned. A change to a formula would orphan saved rows."""
 
 import hashlib
+import re
 
 from lamplighter.ports import (
     canonical_json,
@@ -9,6 +10,8 @@ from lamplighter.ports import (
     inbound_event_id,
     out_id_for,
     saved_json,
+    span_id_for,
+    trace_id_for,
 )
 
 
@@ -57,4 +60,68 @@ def test_the_action_hash_example_follows_from_its_formula() -> None:
 def test_an_outbound_id_is_worked_out_from_the_session_and_the_seq() -> None:
     assert out_id_for("demo-session", 12) == (
         "9131f9196d24c6b60400011912c7ea9b0d0c4d966a4b0c60ff33d9f42ed17e2a"
+    )
+
+
+def test_a_trace_id_is_worked_out_from_the_layout_the_session_and_the_run() -> None:
+    assert trace_id_for(1, "sess_a", "run_a") == "0e9989490d36bd20896dd8df2ee81290"
+
+
+def test_a_span_id_is_worked_out_from_the_layout_the_run_the_role_and_the_event() -> (
+    None
+):
+    assert span_id_for(1, "run_a", "model", event_id_for("sess_a", 4)) == (
+        "92f368cbf10f553c"
+    )
+
+
+def test_the_ids_are_lowercase_hex_of_the_lengths_the_wire_format_takes() -> None:
+    trace = trace_id_for(1, "sess_a", "run_a")
+    span = span_id_for(1, "run_a", "run", event_id_for("sess_a", 2))
+    assert re.fullmatch("[0-9a-f]{32}", trace)
+    assert re.fullmatch("[0-9a-f]{16}", span)
+
+
+def test_a_step_and_its_model_call_are_made_from_one_event_and_differ() -> None:
+    request = event_id_for("sess_a", 4)
+    assert span_id_for(1, "run_a", "step", request) != span_id_for(
+        1, "run_a", "model", request
+    )
+
+
+def test_a_new_layout_number_changes_every_id() -> None:
+    event = event_id_for("sess_a", 4)
+    assert trace_id_for(2, "sess_a", "run_a") != trace_id_for(1, "sess_a", "run_a")
+    for role in ("run", "step", "model", "tool"):
+        assert span_id_for(2, "run_a", role, event) != span_id_for(
+            1, "run_a", role, event
+        )
+
+
+def test_two_runs_whose_events_share_their_ids_share_no_span_id() -> None:
+    # A session deleted and started again under its id gives its events the
+    # old ids. Its runs have new ids, so no span id comes back.
+    for seq in range(1, 20):
+        event = event_id_for("sess_a", seq)
+        for role in ("run", "step", "model", "tool"):
+            assert span_id_for(1, "run_new", role, event) != span_id_for(
+                1, "run_old", role, event
+            )
+
+
+def test_two_sessions_with_one_run_id_have_two_traces() -> None:
+    assert trace_id_for(1, "sess_a", "run_a") != trace_id_for(1, "sess_b", "run_a")
+
+
+def test_the_two_span_formulas_are_the_first_hex_of_a_sha256_of_their_list() -> None:
+    event = event_id_for("sess_a", 4)
+    trace = canonical_json(["trace", 1, "sess_a", "run_a"])
+    span = canonical_json(["span", 1, "run_a", "tool", event])
+    assert (
+        trace_id_for(1, "sess_a", "run_a")
+        == (hashlib.sha256(trace.encode()).hexdigest()[:32])
+    )
+    assert (
+        span_id_for(1, "run_a", "tool", event)
+        == (hashlib.sha256(span.encode()).hexdigest()[:16])
     )

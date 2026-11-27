@@ -13,7 +13,8 @@ import signal
 import stat
 import sys
 import threading
-from collections.abc import Callable, Coroutine
+import time
+from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -26,7 +27,11 @@ from lamplighter.adapters import (
     ScriptedTools,
     SystemClock,
 )
-from lamplighter.adapters.in_memory import InMemoryBlobStore
+from lamplighter.adapters.in_memory import (
+    InMemoryBlobStore,
+    InMemoryTraceCursor,
+    InMemoryTraceSink,
+)
 from lamplighter.adapters.sqlite import (
     SqliteEffectLedger,
     SqliteEventLog,
@@ -37,9 +42,13 @@ from lamplighter.adapters.sqlite import (
 from lamplighter.app.chat import (
     LOCK_HELD,
     NO_WALL,
+    NOT_SENT,
+    PROJECTOR_RAISED,
+    SENDING_STOPPED,
     UNSETTLED,
     WAITING,
     ChatParts,
+    Stores,
     chat,
     run_spec,
 )
@@ -51,6 +60,7 @@ from lamplighter.core import config_id
 from lamplighter.ports import (
     Command,
     EffectLedger,
+    Event,
     EventLog,
     ExecResult,
     Failure,
@@ -60,16 +70,22 @@ from lamplighter.ports import (
     NewEvent,
     Outbound,
     Outbox,
+    Span,
     TextPart,
     ToolCallPart,
     ToolResult,
     ToolSpec,
+    TraceCursor,
+    TraceSink,
     Usage,
     out_id_for,
 )
 from tests.model_by_request import Choose, ModelByRequest, assistant_turns
 from tests.model_samples import PROFILE
+from tests.projector_kit import DOWN
 from tests.run_history import AT, inbound
+from tests.span_checks import log_spans
+from tests.span_count import promised_spans
 from tests.store_samples import action
 from tests.stub_tools import StubTools
 from tests.terminal_kit import Keyboard, Screen, typed
@@ -108,11 +124,15 @@ def parts_for(
     errors: io.StringIO,
     choose: Choose = answers,
     answer: Answer = lambda command: ENDED_WELL,
+    sink: TraceSink | None = None,
+    cursor: TraceCursor | None = None,
 ) -> ChatParts:
     return chat_parts(
         config,
         ModelByRequest(choose),
         tooling_for(config, StubTools(SystemClock()), answer),
+        sink or InMemoryTraceSink(),
+        cursor or InMemoryTraceCursor(),
         keyboard.reader,
         screen,
         errors,
@@ -127,6 +147,9 @@ def chat_with(
     person: Callable[[Screen], None] | None = None,
     answer: Answer = lambda command: ENDED_WELL,
     config: Config | None = None,
+    sink: TraceSink | None = None,
+    cursor: TraceCursor | None = None,
+    opened: list[Stores] | None = None,
 ) -> tuple[int, str, str]:
     """Run one chat, with the person playing beside it, and give what it did."""
     screen, errors = Screen(), io.StringIO()
@@ -145,11 +168,12 @@ def chat_with(
     watchdog.start()
     try:
         config = config or config_in(tmp_path)
-        code = chat(
-            config,
-            session,
-            parts_for(config, keyboard, screen, errors, choose, answer),
+        parts = parts_for(
+            config, keyboard, screen, errors, choose, answer, sink, cursor
         )
+        if opened is not None:
+            parts = dataclasses.replace(parts, open_stores=_noted(parts, opened))
+        code = chat(config, session, parts)
     finally:
         watchdog.cancel()
         keyboard.close()
@@ -158,6 +182,20 @@ def chat_with(
         keyboard.done()
     assert not timed_out.is_set(), "the chat did not end by itself"
     return code, screen.getvalue(), errors.getvalue()
+
+
+def _noted(
+    parts: ChatParts, opened: list[Stores]
+) -> Callable[[Path], Stores | Failure]:
+    """Open the stores as the chat does, and note them for the test."""
+
+    def open_stores(folder: Path) -> Stores | Failure:
+        stores = parts.open_stores(folder)
+        if not isinstance(stores, Failure):
+            opened.append(stores)
+        return stores
+
+    return open_stores
 
 
 def test_a_first_start_makes_the_folder_and_answers_each_line(
@@ -485,6 +523,16 @@ def test_the_run_spec_carries_the_wall_and_its_id_covers_all_six(
     assert run_spec(moved, tooling).config_id != spec.config_id
 
 
+def test_the_run_spec_names_the_model_and_the_adapter_from_the_settings(
+    tmp_path: Path,
+) -> None:
+    config = config_in(tmp_path)
+    tooling = tooling_for(config, StubTools(SystemClock()))(InMemoryBlobStore(10))
+    spec = run_spec(config, tooling)
+    assert (spec.model, spec.provider) == (config.model.model, config.model.adapter)
+    assert (spec.model, spec.provider) == ("made-up-1", "scripted")
+
+
 def test_main_builds_the_seven_built_in_tools_behind_the_wall(tmp_path: Path) -> None:
     config = config_in(tmp_path)
     Path(config.tools.work_dir).mkdir()
@@ -512,6 +560,8 @@ def test_the_chat_starts_on_the_real_tools_before_their_folders_exist(
         config,
         ModelByRequest(answers),
         builtin_tooling(config, SystemClock()),
+        InMemoryTraceSink(),
+        InMemoryTraceCursor(),
         keyboard.reader,
         screen,
         errors,
@@ -549,6 +599,8 @@ def test_a_tool_whose_schema_the_check_cannot_read_stops_the_start(
             config,
             ModelByRequest(answers),
             tooling_for(config, tools),
+            InMemoryTraceSink(),
+            InMemoryTraceCursor(),
             keyboard.reader,
             screen,
             io.StringIO(),
@@ -558,3 +610,227 @@ def test_a_tool_whose_schema_the_check_cannot_read_stops_the_start(
     finally:
         keyboard.done()
     assert "Hello" not in screen.getvalue()
+
+
+def log_of(tmp_path: Path) -> list[Event]:
+    """Give every event of the store the chat left behind."""
+    connection = open_database(tmp_path / "store" / "state.db", 5.0)
+    assert not isinstance(connection, Failure)
+    try:
+        events = asyncio.run(SqliteEventLog(connection, {}, 10_000).tail(0, 10_000))
+    finally:
+        connection.close()
+    assert not isinstance(events, Failure)
+    return list(events)
+
+
+def cursor_at(cursor: TraceCursor) -> int:
+    mark = asyncio.run(cursor.read())
+    assert not isinstance(mark, Failure)
+    return mark.pos
+
+
+class AnsweringSink:
+    """A sink whose every export is answered by the test, and counted."""
+
+    def __init__(
+        self, answer: Callable[[Sequence[Span]], Awaitable[Failure | None]]
+    ) -> None:
+        self.answer = answer
+        self.exports = 0
+
+    @property
+    def leaves_this_mac(self) -> bool:
+        return False
+
+    async def export(self, spans: Sequence[Span]) -> Failure | None:
+        self.exports += 1
+        return await self.answer(spans)
+
+
+def two_lines(
+    screen: Screen,
+    keyboard: Keyboard,
+    before_second: str,
+    before_the_end: Callable[[], bool] = lambda: True,
+) -> None:
+    """Type a line, wait for `before_second` too, type another, end the input.
+
+    The input ends once `before_the_end` holds, or after ten seconds.
+    """
+    keyboard.type(b"Hello.\n")
+    if screen.wait_for("Answer 1.") and screen.wait_for(before_second):
+        keyboard.type(b"Again.\n")
+        screen.wait_for("Answer 2.")
+    deadline = time.monotonic() + 10
+    while not before_the_end() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    keyboard.close()
+
+
+def test_a_chat_sends_the_spans_of_its_runs_and_its_cursor_ends_at_the_log_end(
+    tmp_path: Path,
+) -> None:
+    keyboard = Keyboard()
+    sink, cursor = InMemoryTraceSink(), InMemoryTraceCursor()
+    code, _, errors = chat_with(
+        tmp_path,
+        keyboard,
+        person=lambda shown: two_lines(shown, keyboard, "Answer 1."),
+        sink=sink,
+        cursor=cursor,
+    )
+    events = log_of(tmp_path)
+    truth = {made.span.span_id: made.span for made in log_spans(events)}
+
+    assert (code, errors) == (0, "")
+    assert {span.span_id: span for span in sink.held} == truth
+    # Two runs, each a run, a step and a model call.
+    assert len(truth) == promised_spans(events) == 6
+    assert cursor_at(cursor) == events[-1].pos
+
+
+def replies(screen: str) -> list[str]:
+    return [line for line in screen.splitlines() if "Answer" in line]
+
+
+def test_a_trace_store_down_for_the_whole_chat_is_told_once_and_changes_no_reply(
+    tmp_path: Path,
+) -> None:
+    keyboard, cursor = Keyboard(), InMemoryTraceCursor()
+
+    async def down(spans: Sequence[Span]) -> Failure | None:
+        return DOWN
+
+    sink = AnsweringSink(down)
+    code, screen, errors = chat_with(
+        tmp_path / "down",
+        keyboard,
+        session="sess-a",
+        person=lambda shown: two_lines(
+            shown, keyboard, "Spans are not", lambda: sink.exports >= 2
+        ),
+        sink=sink,
+        cursor=cursor,
+    )
+    plain = Keyboard()
+    _, plain_screen, _ = chat_with(
+        tmp_path / "plain",
+        plain,
+        session="sess-a",
+        person=lambda shown: two_lines(shown, plain, "Answer 1."),
+    )
+
+    assert (code, errors) == (0, "")
+    assert screen.count(NOT_SENT.format(message=DOWN.message)) == 1
+    assert replies(screen) == replies(plain_screen) == ["Answer 1.", "Answer 2."]
+    # Two failed passes while the chat was open, and the last passes.
+    assert sink.exports >= 3
+    assert cursor_at(cursor) == 0
+
+
+def test_a_failure_that_will_not_pass_is_told_once_and_ends_the_sending(
+    tmp_path: Path,
+) -> None:
+    keyboard = Keyboard()
+    fatal = Failure(kind="fatal", effect="unknown", message="Made up.", source="t")
+
+    async def broken(spans: Sequence[Span]) -> Failure | None:
+        return fatal
+
+    sink = AnsweringSink(broken)
+    code, screen, errors = chat_with(
+        tmp_path,
+        keyboard,
+        person=lambda shown: two_lines(shown, keyboard, "Sending spans stopped"),
+        sink=sink,
+    )
+
+    assert (code, errors) == (0, "")
+    assert screen.count(SENDING_STOPPED.format(message="Made up.")) == 1
+    assert "Answer 2." in screen
+    # The task ended by itself, so the chat's end makes no last pass.
+    assert sink.exports == 1
+
+
+def test_a_projector_that_raises_is_logged_told_once_and_the_chat_goes_on(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    keyboard = Keyboard()
+
+    async def raises(spans: Sequence[Span]) -> Failure | None:
+        raise RuntimeError("a made-up bug")
+
+    sink = AnsweringSink(raises)
+    code, screen, errors = chat_with(
+        tmp_path,
+        keyboard,
+        person=lambda shown: two_lines(shown, keyboard, "after an error"),
+        sink=sink,
+    )
+
+    assert (code, errors) == (0, "")
+    assert screen.count(PROJECTOR_RAISED) == 1
+    assert "Answer 2." in screen
+    assert sink.exports == 1
+    [logged] = [r for r in caplog.records if r.name == "lamplighter.app.chat"]
+    assert logged.levelname == "ERROR"
+    assert logged.exc_info is not None
+    assert "a made-up bug" in str(logged.exc_info[1])
+
+
+def test_a_trace_store_that_hangs_holds_the_end_of_the_chat_2_seconds(
+    tmp_path: Path,
+) -> None:
+    async def hangs(spans: Sequence[Span]) -> Failure | None:
+        # Long enough to be seen, short enough not to stall the run.
+        await asyncio.sleep(15)
+        return None
+
+    began = time.monotonic()
+    code, screen, _ = chat_with(tmp_path, typed(b"Hello.\n"), sink=AnsweringSink(hangs))
+    took = time.monotonic() - began
+
+    assert code == 0
+    assert "Answer 1." in screen
+    assert 2.0 <= took < 6.0
+
+
+def test_the_last_passes_run_with_the_handlers_in_place_and_the_store_open(
+    tmp_path: Path,
+) -> None:
+    keyboard, ended = Keyboard(), threading.Event()
+    endings = (signal.SIGINT, signal.SIGHUP, signal.SIGTERM)
+    before = {ending: signal.getsignal(ending) for ending in endings}
+    opened: list[Stores] = []
+    seen: list[tuple[bool, bool]] = []
+    kept = InMemoryTraceSink()
+
+    async def down_until_the_end(spans: Sequence[Span]) -> Failure | None:
+        if not ended.is_set():
+            return DOWN
+        handled = all(signal.getsignal(e) != before[e] for e in endings)
+        try:
+            readable = not isinstance(await opened[0].log.tail(0, 1), Failure)
+        except Exception:
+            readable = False
+        seen.append((handled, readable))
+        return await kept.export(spans)
+
+    def person(screen: Screen) -> None:
+        keyboard.type(b"Hello.\n")
+        screen.wait_for("Spans are not")
+        ended.set()
+        keyboard.close()
+
+    code, _, errors = chat_with(
+        tmp_path,
+        keyboard,
+        person=person,
+        sink=AnsweringSink(down_until_the_end),
+        opened=opened,
+    )
+
+    assert (code, errors) == (0, "")
+    assert seen == [(True, True)]
+    assert len(kept.held) == promised_spans(log_of(tmp_path)) > 0
