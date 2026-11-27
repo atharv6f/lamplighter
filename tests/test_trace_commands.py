@@ -186,7 +186,7 @@ def settings(tmp_path: Path, phoenix_url: str = "http://127.0.0.1:6006") -> str:
 def saved(tmp_path: Path, events: list[Event]) -> None:
     """Save the made-up events in a real store, in the same order."""
     folder = tmp_path / "store"
-    folder.mkdir(mode=0o700)
+    folder.mkdir(mode=0o700, exist_ok=True)
     connection = open_database(folder / "state.db", 5.0)
     assert not isinstance(connection, Failure)
     log = SqliteEventLog(connection, {}, 100_000)

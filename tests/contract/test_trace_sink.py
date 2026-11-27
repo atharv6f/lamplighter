@@ -2,7 +2,9 @@
 
 import asyncio
 import dataclasses
+import tempfile
 from collections.abc import Callable, Coroutine, Generator, Sequence
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -12,6 +14,7 @@ from lamplighter.adapters.in_memory import InMemoryTraceSink
 from lamplighter.adapters.phoenix import PhoenixSink
 from lamplighter.ports import Failure, Span, SpanKind, TraceSink
 from tests.fake_clock import FakeClock
+from tests.phoenix_process import running_phoenix
 from tests.phoenix_stand_in import stand_in
 
 # What the store holds: the name of each span, by its id.
@@ -51,13 +54,23 @@ def phoenix() -> Generator[tuple[TraceSink, Held]]:
         yield _OnePhoenixClient(server.url), server.names
 
 
-SINKS: dict[str, Callable[[], Generator[tuple[TraceSink, Held]]]] = {
-    "in_memory": in_memory,
-    "phoenix_stand_in": phoenix,
-}
+def real_phoenix() -> Generator[tuple[TraceSink, Held]]:
+    with (
+        tempfile.TemporaryDirectory() as folder,
+        running_phoenix(Path(folder) / "phoenix") as made,
+    ):
+        yield _OnePhoenixClient(made.url), made.names
 
 
-@pytest.fixture(params=list(SINKS.values()), ids=list(SINKS))
+SINKS: list[Any] = [
+    pytest.param(in_memory, id="in_memory"),
+    pytest.param(phoenix, id="phoenix_stand_in"),
+    # A real Phoenix is started for each test, so the default run leaves it out.
+    pytest.param(real_phoenix, id="real_phoenix", marks=pytest.mark.phoenix),
+]
+
+
+@pytest.fixture(params=SINKS)
 def made(request: pytest.FixtureRequest) -> Generator[tuple[TraceSink, Held]]:
     yield from request.param()
 
