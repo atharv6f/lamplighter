@@ -131,6 +131,7 @@ def test_the_command_reads_only_in_the_work_folder_with_six_variables(
         "PATH": "/usr/bin:/bin",
         "HOME": f"{settings.scratch_dir}/home",
         "TMPDIR": f"{settings.scratch_dir}/tmp",
+        "TMPPREFIX": f"{settings.scratch_dir}/tmp/zsh",
         "LANG": "en_US.UTF-8",
         "TERM": "dumb",
         "NO_COLOR": "1",

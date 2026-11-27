@@ -24,14 +24,17 @@ class ToolSettings:
 
 
 def command_env(settings: ToolSettings) -> dict[str, str]:
-    """Give the six variables a command gets, and nothing of the harness's own.
+    """Give the seven variables a command gets, and nothing of the harness's own.
 
     The harness's environment holds the API key, so none of it is passed on.
+    zsh makes its temp files under `TMPPREFIX`, not `TMPDIR`, and its own
+    default is in /tmp, which the wall closes.
     """
     return {
         "PATH": settings.shell_path,
         "HOME": f"{settings.scratch_dir}/home",
         "TMPDIR": f"{settings.scratch_dir}/tmp",
+        "TMPPREFIX": f"{settings.scratch_dir}/tmp/zsh",
         "LANG": "en_US.UTF-8",
         "TERM": "dumb",
         "NO_COLOR": "1",

@@ -144,7 +144,7 @@ def test_real_commands_give_both_streams_as_one_and_bytes_replaced(work: Path) -
     assert (work / "made.txt").read_text() == "made\n"
 
 
-def test_the_command_sees_the_six_variables_and_none_of_the_harness(
+def test_the_command_sees_the_seven_variables_and_none_of_the_harness(
     work: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "a made-up key that must not be seen")
@@ -157,6 +157,7 @@ def test_the_command_sees_the_six_variables_and_none_of_the_harness(
         "PATH=/usr/bin:/bin",
         "TERM=dumb",
         f"TMPDIR={scratch}/tmp",
+        f"TMPPREFIX={scratch}/tmp/zsh",
     }
     assert given <= set(seen)
     # bash itself sets these three for the programs it starts.
