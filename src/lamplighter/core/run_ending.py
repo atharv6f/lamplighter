@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from lamplighter.core import harness_texts
+from lamplighter.core.effect_step import close_unstarted
 from lamplighter.core.event_types import CANCELLED, LIMIT_HIT, REPLY_READY, TOOL_RESULT
 from lamplighter.core.next_move import EndRun
 from lamplighter.core.run_deps import Deps
@@ -36,8 +37,10 @@ async def end_run(
     """Save the end batch: why the run ended, a `not_run` result for each open
     call, and `reply_ready` with what you are told.
 
-    Nothing is sent and the run stays open, so a kill after this batch is
-    carried on by closing the run.
+    First the ledger row of each open call that was begun and never started
+    is closed as failed, with the call's `not_run` payload. Nothing is sent
+    and the run stays open, so a kill after this batch is carried on by
+    closing the run.
     """
     at = utc_text(deps.clock.now())
     batch: list[NewEvent] = []
@@ -50,9 +53,14 @@ async def end_run(
         batch.append(in_run(view, at, LIMIT_HIT, payload))
     if move.reason == "cancelled":
         batch.append(in_run(view, at, CANCELLED, {}))
-    for call in view.open_calls:
-        text = harness_texts.not_run(call.call.name)
-        result = harness_result(call, "not_run", text)
+    answered = [
+        (call, harness_result(call, "not_run", harness_texts.not_run(call.call.name)))
+        for call in view.open_calls
+    ]
+    closed = await close_unstarted(session_id, answered, deps)
+    if isinstance(closed, Failure):
+        return closed
+    for call, result in answered:
         batch.append(in_run(view, at, TOOL_RESULT, result, cause=call.reply_id))
     ready = {
         "text": move.text,

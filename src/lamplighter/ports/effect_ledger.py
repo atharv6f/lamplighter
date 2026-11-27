@@ -105,7 +105,8 @@ class EffectLedger(Protocol):
       kill between `begin` and `finish`, `unresolved` lists the effect.
     - `begin` with a key already saved and the same action changes nothing
       and returns the saved row, which is not new. Its `probe` and `undo`
-      arguments are then ignored. A different action under a saved key is
+      arguments are then ignored, and it gives no id away: the ids of new
+      rows follow one another with no gap. A different action under a saved key is
       `conflict`. "The same" is judged after both are read back from their
       saved form, so a field that newer code added cannot make them differ.
     - `finish` moves an effect from "intended" to the outcome of its result,

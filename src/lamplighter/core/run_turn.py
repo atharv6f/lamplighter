@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 
+from lamplighter.core.effect_step import run_change, settle_effect
 from lamplighter.core.model_step import call_model
 from lamplighter.core.next_move import (
     AnswerCall,
@@ -13,6 +14,7 @@ from lamplighter.core.next_move import (
     Idle,
     Move,
     RunCall,
+    SettleEffect,
     StartRun,
     TakeMessages,
     next_move,
@@ -126,9 +128,8 @@ async def _carry_out(
             return await take_messages(session_id, view, move.messages, deps)
         case CallModel():
             return await call_model(session_id, view, events, tools, spec, deps)
-        case RunCall():
-            entry = entries[move.call.call.name]
-            return await run_call(session_id, view, move.call, entry, spec, deps)
+        case RunCall() | SettleEffect():
+            return await _tool_move(session_id, view, move, entries, spec, deps)
         case AnswerCall():
             return await answer_call(
                 session_id, view, move.call, move.harness, tools, deps
@@ -137,3 +138,20 @@ async def _carry_out(
             return await end_run(session_id, view, move, deps)
         case Idle() | CloseRun():
             raise ValueError("the loop itself handles this move")
+
+
+async def _tool_move(
+    session_id: str,
+    view: RunView,
+    move: RunCall | SettleEffect,
+    entries: Mapping[str, ToolEntry],
+    spec: RunSpec,
+    deps: Deps,
+) -> Failure | None:
+    # A change is settled from its saved intent, so it needs no entry.
+    if isinstance(move, SettleEffect):
+        return await settle_effect(session_id, view, move.call, deps)
+    entry = entries[move.call.call.name]
+    if entry.action_class == "read":
+        return await run_call(session_id, view, move.call, entry, spec, deps)
+    return await run_change(session_id, view, move.call, entry, spec, deps)

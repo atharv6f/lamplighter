@@ -26,6 +26,7 @@ from lamplighter.core.next_move import (
     Idle,
     Move,
     RunCall,
+    SettleEffect,
     StartRun,
     TakeMessages,
     next_move,
@@ -229,11 +230,35 @@ def test_a_read_is_not_run_again_when_the_tool_is_gone() -> None:
     assert interrupted(move(read_cut_off(), entries=gone))
 
 
-def test_a_call_whose_intent_has_another_class_is_not_run_again() -> None:
-    history = opened()
-    history.step_with(call("call_a"))
+def change_cut_off(**reply: Any) -> History:
+    """A run whose change of `wait`, as it was listed then, has an intent."""
+    history = History().start(config_id=reply.pop("config_id", SPEC.config_id))
+    history.request()
+    history.reply(call("call_a"), reason="tool_calls", **reply)
     history.intent(call("call_a"), "irreversible")
-    assert interrupted(move(history))
+    return history
+
+
+def settled(answered: Move) -> bool:
+    return isinstance(answered, SettleEffect) and answered.call.call.id == "call_a"
+
+
+def test_a_change_with_its_intent_saved_is_settled() -> None:
+    assert settled(move(change_cut_off()))
+
+
+def test_a_change_is_settled_before_a_stop() -> None:
+    assert settled(move(change_cut_off(), (row(2, stop("s2")),)))
+
+
+def test_a_change_is_settled_before_changed_settings_and_the_time_limit() -> None:
+    history = change_cut_off(config_id="d" * 64, duration_ms=1_300_000)
+    assert settled(move(history))
+
+
+def test_a_change_is_settled_when_its_tool_is_no_longer_listed() -> None:
+    gone = {name: entry for name, entry in TOOLS.items() if name != "wait"}
+    assert settled(move(change_cut_off(), entries=gone))
 
 
 # No call is open, and the newest reply ended the run.

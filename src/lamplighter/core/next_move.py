@@ -111,6 +111,13 @@ class EndRun:
 
 
 @dataclass(frozen=True, slots=True)
+class SettleEffect:
+    """Answer a change whose intent is saved from its ledger row, without a run."""
+
+    call: OpenCall
+
+
+@dataclass(frozen=True, slots=True)
 class RunCall:
     """Run one tool call: for the first time, or a read once more after a kill."""
 
@@ -137,6 +144,7 @@ type Move = (
     | CloseRun
     | AnswerCall
     | EndRun
+    | SettleEffect
     | RunCall
     | TakeMessages
     | CallModel
@@ -216,9 +224,7 @@ def _in_open_run(
     first = view.open_calls[0] if view.open_calls else None
     stop_pending = any(is_stop(row.inbound) for row in rows)
     if first is not None and first.intents:
-        if _may_read_again(view, first, spec, entries, stop_pending):
-            return RunCall(first)
-        return AnswerCall(first, "interrupted")
+        return _for_started_call(view, first, spec, entries, stop_pending)
     if first is None:
         ending = _what_the_reply_leads_to(view, spec)
         if ending is not None:
@@ -236,6 +242,22 @@ def _in_open_run(
     if messages:
         return TakeMessages(messages)
     return CallModel()
+
+
+def _for_started_call(
+    view: RunView,
+    first: OpenCall,
+    spec: RunSpec,
+    entries: Mapping[str, ToolEntry],
+    stop_pending: bool,
+) -> Move:
+    # A change that had its intent saved is settled before anything can end
+    # the run: a stop, new settings or the time.
+    if first.intents[0].action_class not in (None, "read"):
+        return SettleEffect(first)
+    if _may_read_again(view, first, spec, entries, stop_pending):
+        return RunCall(first)
+    return AnswerCall(first, "interrupted")
 
 
 def _may_read_again(

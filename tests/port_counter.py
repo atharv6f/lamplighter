@@ -7,7 +7,7 @@ the arrival sweeps make a message or a stop arrive there.
 
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, cast
 
 from lamplighter.ports import (
     Accepted,
@@ -51,12 +51,24 @@ async def no_hook(number: int, when: When, name: str) -> None:
     del number, when, name
 
 
+# The stores, whose every call may answer with a failure.
+STORES = ("log.", "inbox.", "outbox.", "ledger.", "blobs.")
+STORE_FAILURE = Failure(
+    kind="unavailable", effect="none", message="The drive is gone.", source="t"
+)
+
+
 @dataclass
 class Counter:
-    """Numbers every call and runs the hook around it."""
+    """Numbers every call and runs the hook around it.
+
+    With `fail_at`, the store call of that number answers with a failure
+    and does nothing, as a store that is gone for a moment would.
+    """
 
     hook: Hook = no_hook
     names: list[str] = field(default_factory=list[str])
+    fail_at: int | None = None
 
     @property
     def calls(self) -> int:
@@ -66,6 +78,9 @@ class Counter:
         self.names.append(name)
         number = len(self.names)
         await self.hook(number, "before", name)
+        if number == self.fail_at and name.startswith(STORES):
+            # Every store call returns its value or a Failure.
+            return cast(T, STORE_FAILURE)
         result = await call()
         await self.hook(number, "after", name)
         return result

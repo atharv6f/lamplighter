@@ -16,7 +16,17 @@ type HarnessKind = Literal[
     "stopped",
     "out_of_time",
     "not_run",
+    "unconfirmed",
 ]
+
+# Why a change's outcome was not known when its result was written.
+type UnsettledReason = Literal["interrupted", "stopped", "out_of_time", "unconfirmed"]
+UNSETTLED_REASONS: tuple[UnsettledReason, ...] = (
+    "interrupted",
+    "stopped",
+    "out_of_time",
+    "unconfirmed",
+)
 
 type LimitName = Literal["steps", "seconds", "tokens", "micro_dollars"]
 
@@ -59,29 +69,59 @@ def interrupted(name: str) -> str:
     """Tell the model a call was cut off before its result was saved.
 
     The run may have been cut off by a kill or by a store that failed, so
-    the sentence names neither.
+    the sentence names neither. It is the one text for a read and a change.
     """
-    return (
-        f"The run was cut off before the result of {name} was saved, and the call"
-        " was not run again. Its outcome is unknown: it may have finished, partly"
-        " run, or not run at all."
-    )
+    return unsettled("interrupted", name, None)
 
 
 def stopped(name: str) -> str:
     """Tell the model a call was cut short by your stop."""
-    return (
-        f"{name} was cut short because the user stopped the run."
-        " Its outcome is unknown."
-    )
+    return unsettled("stopped", name, None)
 
 
 def out_of_time(name: str) -> str:
     """Tell the model a call was cut short by the run's time limit."""
-    return (
-        f"{name} was cut short because the run reached its time limit."
-        " Its outcome is unknown."
-    )
+    return unsettled("out_of_time", name, None)
+
+
+TOOK_EFFECT = "A check afterwards shows that it took effect."
+NO_EFFECT = (
+    "A check afterwards shows that it did not take effect: its target is as it was."
+)
+_OUTCOME_UNKNOWN = "Its outcome is unknown."
+_MAY_HAVE_RUN = (
+    "Its outcome is unknown: it may have finished, partly run, or not run at all."
+)
+
+
+def unsettled(
+    reason: UnsettledReason, name: str, found: bool | None, failure: str | None = None
+) -> str:
+    """Say why a call's outcome was not known, and what a check found after.
+
+    `found` is the check's answer, or None when there was no check or it
+    could not tell. `failure` is the error text of a tool that failed and
+    could not say whether it changed anything.
+    """
+    match reason:
+        case "interrupted":
+            opening = (
+                f"The run was cut off before the result of {name} was saved,"
+                " and the call was not run again."
+            )
+        case "stopped":
+            opening = f"{name} was cut short because the user stopped the run."
+        case "out_of_time":
+            opening = f"{name} was cut short because the run reached its time limit."
+        case "unconfirmed":
+            opening = f"{failure} It could not say whether anything was changed."
+    if found is True:
+        return f"{opening} {TOOK_EFFECT}"
+    if found is False:
+        return f"{opening} {NO_EFFECT}"
+    if reason == "interrupted":
+        return f"{opening} {_MAY_HAVE_RUN}"
+    return f"{opening} {_OUTCOME_UNKNOWN}"
 
 
 def not_run(name: str) -> str:

@@ -12,14 +12,17 @@ import contextlib
 from collections import Counter as Tally
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from typing import Literal
 
 from lamplighter.adapters import (
     CountingIds,
+    MadeUpWorld,
     ScriptedBreak,
     ScriptedChannel,
     ScriptedReply,
     ScriptedTool,
     ScriptedTools,
+    WorldTools,
 )
 from lamplighter.core import (
     Deps,
@@ -30,18 +33,30 @@ from lamplighter.core import (
     drive,
     take,
 )
+from lamplighter.core.harness_texts import NO_EFFECT, TOOK_EFFECT
 from lamplighter.ports import (
+    Begun,
+    Effect,
+    EffectLedger,
+    EffectResult,
     Event,
     Failure,
     Inbound,
     JsonObject,
     JsonValue,
     ModelRequest,
+    Plan,
     TextPart,
     ToolCallPart,
+    ToolEntry,
+    ToolProvider,
     ToolResult,
     ToolSpec,
     canonical_json,
+    saved_json,
+)
+from lamplighter.ports import (
+    Outcome as Settled,
 )
 from tests.chat_kit import Outcome, Stores, outcome
 from tests.model_by_request import Choose, ModelByRequest, check_request
@@ -65,7 +80,16 @@ type Turn = ScriptedReply | ScriptedBreak
 
 HARNESS_NOTE = "Note from the harness"
 EMPTY_NOTE = "your last reply was empty"
-INTERRUPTED_ANSWERS = {"interrupted", "stopped", "out_of_time", "not_run"}
+INTERRUPTED_ANSWERS = {
+    "interrupted",
+    "stopped",
+    "out_of_time",
+    "not_run",
+    "unconfirmed",
+}
+# The changes whose row may be left unknown: one has no probe, and the other
+# ignores its cancel, so its check is skipped while it may still be running.
+MAY_STAY_UNKNOWN = {"launch", "stubborn_put"}
 
 
 class Killed(BaseException):
@@ -89,17 +113,20 @@ class Scenario:
     """One chat to kill: what waits at the start, and how the model answers.
 
     `script` gives, for each text the person wrote, the model's replies in
-    order. `during_wait` arrives while the `wait` tool runs. `spec_after`
-    is the spec of every process after the first, as when the settings
-    change at a restart.
+    order. `during_tool` arrives when the tool named `arrives_on` starts.
+    `spec_after` is the spec of every process after the first, as when the
+    settings change at a restart. `tools` picks the layer of tools: notes
+    that only read, or the made-up world that reads and changes.
     """
 
     name: str
     waiting: tuple[Inbound, ...]
     script: dict[str, tuple[Turn, ...]]
     spec: RunSpec = SPEC
-    during_wait: Inbound | None = None
+    during_tool: Inbound | None = None
+    arrives_on: str = "wait"
     spec_after: RunSpec | None = None
+    tools: Literal["notes", "world"] = "notes"
 
 
 @dataclass
@@ -114,6 +141,13 @@ class World:
     ids: CountingIds = field(default_factory=CountingIds)
     started: list[tuple[str, str]] = field(default_factory=list[tuple[str, str]])
     processes: int = 0
+    made: MadeUpWorld = field(default_factory=MadeUpWorld)
+    rows: dict[int, Effect] = field(default_factory=dict[int, Effect])
+
+    @property
+    def starts(self) -> list[tuple[str, str]]:
+        """Every tool start, of the notes and of the made-up world."""
+        return self.started + self.made.started
 
 
 def answers(script: Mapping[str, Sequence[Turn]]) -> Choose:
@@ -178,7 +212,7 @@ def _tools(world: World, arrive: "Arrival") -> ScriptedTools:
 
     async def wait(arguments: JsonObject) -> ToolResult:
         world.started.append(("wait", canonical_json(arguments)))
-        await arrive.now()
+        await arrive.now("wait")
         seconds = arguments.get("seconds")
         assert isinstance(seconds, int)
         await world.clock.sleep(seconds)
@@ -200,8 +234,10 @@ class Arrival:
     running: RunningSessions
     wake: Wake
 
-    async def now(self) -> None:
-        if self.made is not None:
+    arrives_on: str
+
+    async def now(self, tool: str) -> None:
+        if self.made is not None and tool == self.arrives_on:
             stores = self.world.stores
             await take(
                 self.made,
@@ -218,6 +254,7 @@ async def _one_process(
     spec: RunSpec,
     kill_at: Point | None,
     counter: Counter,
+    fail_at: int | None = None,
 ) -> None:
     async def kill(number: int, when: When, name: str) -> None:
         del name
@@ -225,18 +262,25 @@ async def _one_process(
             raise Killed
 
     counter.hook = kill
+    counter.fail_at = fail_at
     running = RunningSessions()
     wake = Wake()
     wake.end_input()
-    arrival = Arrival(world, scenario.during_wait, running, wake)
+    arrival = Arrival(world, scenario.during_tool, running, wake, scenario.arrives_on)
     stores = world.stores
+    made = WorldTools(world.made, world.clock)
+    tools: ToolProvider = (
+        _tools(world, arrival)
+        if scenario.tools == "notes"
+        else ArrivingTools(made, arrival)
+    )
     deps = Deps(
         log=CountedLog(stores.log, counter),
         inbox=CountedInbox(stores.inbox, counter),
         outbox=CountedOutbox(stores.outbox, counter),
         model=CountedModel(ModelByRequest(answers(scenario.script)), counter),
-        tools=CountedTools(_tools(world, arrival), counter),
-        ledger=CountedLedger(stores.ledger, counter),
+        tools=CountedTools(tools, counter),
+        ledger=CountedLedger(MirroredLedger(stores.ledger, world.rows), counter),
         blobs=CountedBlobs(stores.blobs, counter),
         clock=world.clock,
         ids=world.ids,
@@ -244,13 +288,32 @@ async def _one_process(
         running=running,
     )
     channel = CountedChannel(world.channel, counter)
-    assert await drive(SESSION, spec, deps, channel, wake, lambda: None) is None
+    try:
+        # A store failure ends the drive, and the same process calls it
+        # again, with what it still holds in memory. With no failure made,
+        # the first drive must end well.
+        for _ in range(1 if fail_at is None else 2):
+            if await drive(SESSION, spec, deps, channel, wake, lambda: None) is None:
+                break
+        else:
+            raise AssertionError("the drive failed twice")
+    finally:
+        # The process is gone, killed or ended, before its loop shuts down:
+        # nothing a tool left running reaches the world after this.
+        made.gone()
 
 
 def run_process(
-    world: World, scenario: Scenario, kill_at: Point | None = None
+    world: World,
+    scenario: Scenario,
+    kill_at: Point | None = None,
+    fail_at: int | None = None,
 ) -> Counter:
-    """Run one process on the world to its end, or to the kill. Give its count."""
+    """Run one process on the world to its end, or to the kill. Give its count.
+
+    With `fail_at`, that store call answers with a failure, and the process
+    carries on by driving the chat again.
+    """
     spec = (
         scenario.spec
         if world.processes == 0
@@ -259,7 +322,7 @@ def run_process(
     world.processes += 1
     counter = Counter()
     with contextlib.suppress(Killed):
-        asyncio.run(_one_process(world, scenario, spec, kill_at, counter))
+        asyncio.run(_one_process(world, scenario, spec, kill_at, counter, fail_at))
     return counter
 
 
@@ -308,12 +371,13 @@ def ended(world: World) -> Outcome:
 def what_is_wrong(world: World, scenario: Scenario) -> list[str]:
     """Give each rule the world breaks once every process has ended."""
     messages = sum(1 for made in scenario.waiting if made.kind == "message")
-    during = scenario.during_wait
+    during = scenario.during_tool
     if during is not None and during.kind == "message":
-        # It arrives when the wait tool first starts, if it ever does.
-        messages += any(name == "wait" for name, _ in world.started)
+        # It arrives when its tool first starts, if it ever does.
+        messages += any(name == scenario.arrives_on for name, _ in world.starts)
     stores = ended(world)
-    return broken_rules(stores, world.started, messages) + _replies(stores)
+    wrong = broken_rules(stores, world.starts, messages) + _replies(stores)
+    return wrong + changes_wrong(stores.events, world.rows, world.made)
 
 
 def broken_rules(
@@ -456,3 +520,183 @@ def with_limits(**limits: int) -> RunSpec:
 def call(call_id: str, name: str, **arguments: object) -> ToolCallPart:
     """Give a tool call with these arguments."""
     return ToolCallPart(id=call_id, name=name, arguments=dict(arguments))  # type: ignore[arg-type]
+
+
+class ArrivingTools:
+    """The made-up world's tools, with the scenario's arrival as a tool starts."""
+
+    def __init__(self, inner: WorldTools, arrival: Arrival) -> None:
+        self._inner = inner
+        self._arrival = arrival
+
+    def list_tools(self) -> tuple[ToolEntry, ...]:
+        return self._inner.list_tools()
+
+    async def call(self, name: str, arguments: JsonObject) -> ToolResult | Failure:
+        await self._arrival.now(name)
+        return await self._inner.call(name, arguments)
+
+    async def plan(
+        self, name: str, arguments: JsonObject
+    ) -> Plan | ToolResult | Failure:
+        return await self._inner.plan(name, arguments)
+
+    async def apply(
+        self, name: str, arguments: JsonObject, plan: Plan
+    ) -> ToolResult | Failure:
+        await self._arrival.now(name)
+        return await self._inner.apply(name, arguments, plan)
+
+    async def check(self, probe: JsonObject) -> bool | None:
+        return await self._inner.check(probe)
+
+
+class MirroredLedger:
+    """A ledger that keeps a copy of each row it was told of, so a test can see all.
+
+    The port lists only the rows that are still open. The copy is kept in
+    the world, so it outlives each process as the ledger does.
+    """
+
+    def __init__(self, inner: EffectLedger, rows: dict[int, Effect]) -> None:
+        self._inner = inner
+        self._rows = rows
+
+    async def begin(
+        self, action: object, probe: JsonObject | None, undo: JsonObject | None
+    ) -> Begun | Failure:
+        begun = await self._inner.begin(action, probe, undo)  # type: ignore[arg-type]
+        if isinstance(begun, Begun):
+            self._rows[begun.effect.effect_id] = begun.effect
+        return begun
+
+    async def finish(self, effect_id: int, result: EffectResult) -> None | Failure:
+        finished = await self._inner.finish(effect_id, result)
+        if finished is None:
+            row = self._rows[effect_id]
+            self._rows[effect_id] = replace(row, state=result.outcome, result=result)
+        return finished
+
+    async def resolve(self, effect_id: int, outcome: Settled) -> None | Failure:
+        resolved = await self._inner.resolve(effect_id, outcome)
+        if resolved is None:
+            row = self._rows[effect_id]
+            self._rows[effect_id] = replace(row, state="resolved", resolution=outcome)
+        return resolved
+
+    async def unresolved(self) -> tuple[Effect, ...] | Failure:
+        return await self._inner.unresolved()
+
+
+def changes_wrong(
+    events: Sequence[Event], rows: Mapping[int, Effect], made: MadeUpWorld
+) -> list[str]:
+    """Give each rule about changes that the log, the ledger and the world break."""
+    calls = _whole_calls(events)
+    intents = {
+        int(str(e.payload["effect_id"])): str(e.payload["call_id"])
+        for e in events
+        if e.type == "tool_intent" and "effect_id" in e.payload
+    }
+    results = {
+        str(e.payload["call_id"]): e.payload for e in events if e.type == "tool_result"
+    }
+    wrong: list[str] = []
+    for effect_id, call_id in intents.items():
+        row = rows.get(effect_id)
+        if row is None:
+            wrong.append(f"the intent of {call_id} has no ledger row")
+        elif call_id in results and row.state == "intended":
+            wrong.append(f"call {call_id} has a result and its row is intended")
+    for row in rows.values():
+        wrong += _row_wrong(row, events, intents, results)
+    return wrong + _world_wrong(rows, calls, intents, results, made)
+
+
+def _row_wrong(
+    row: Effect,
+    events: Sequence[Event],
+    intents: Mapping[int, str],
+    results: Mapping[str, JsonObject],
+) -> list[str]:
+    wrong: list[str] = []
+    named = f"row {row.effect_id} of {row.action.tool}"
+    if row.state == "intended":
+        wrong.append(f"{named} is still intended")
+    if row.effect_id not in intents and row.state != "failed":
+        wrong.append(f"{named} has no intent and is {row.state}")
+    if row.state == "unknown" and row.action.tool not in MAY_STAY_UNKNOWN:
+        wrong.append(f"{named} is left unknown")
+    if row.state in ("done", "failed"):
+        call_id = intents.get(row.effect_id) or _call_id_at(
+            events, row.action.reply_seq, row.action.call_index
+        )
+        payload = results.get(call_id)
+        output = row.result.output if row.result is not None else None
+        if payload is None or saved_json(output) != saved_json(payload):
+            wrong.append(f"{named} saved another output than its result")
+    return wrong
+
+
+def _world_wrong(
+    rows: Mapping[int, Effect],
+    calls: Mapping[str, tuple[str, str]],
+    intents: Mapping[int, str],
+    results: Mapping[str, JsonObject],
+    made: MadeUpWorld,
+) -> list[str]:
+    # A change is known by its tool and arguments. Each row changes the
+    # world at most once, so of the rows with one key, no more say it
+    # happened than there were changes, and no more say it did not than
+    # there were rows that changed nothing. The rows and the texts are
+    # counted apart, because each is told to someone.
+    changed = Tally(made.changed)
+    begun = Tally(_key(row) for row in rows.values())
+    started = Tally(calls[call_id] for call_id in intents.values())
+    by_row, by_text = _claims(rows, intents, results)
+    wrong: list[str] = []
+    for key in set(changed) | set(begun):
+        if changed[key] > started[key]:
+            wrong.append(
+                f"{key} changed {changed[key]} times for {started[key]} intents"
+            )
+        for who, said in (("a row", by_row), ("a text", by_text)):
+            if said[True][key] > changed[key]:
+                wrong.append(f"{who} says {key} happened more often than it did")
+            if said[False][key] > begun[key] - changed[key]:
+                wrong.append(f"{who} says {key} did not happen, and it did")
+    return wrong
+
+
+type Claims = dict[bool, Tally[tuple[str, str]]]
+
+
+def _claims(
+    rows: Mapping[int, Effect],
+    intents: Mapping[int, str],
+    results: Mapping[str, JsonObject],
+) -> tuple[Claims, Claims]:
+    """Count, by key, the rows and the texts that say a change did or did not happen."""
+    by_row: Claims = {True: Tally(), False: Tally()}
+    by_text: Claims = {True: Tally(), False: Tally()}
+    for row in rows.values():
+        if row.state == "resolved" and row.resolution is not None:
+            by_row[row.resolution.happened][_key(row)] += 1
+        elif row.state in ("done", "failed"):
+            by_row[row.state == "done"][_key(row)] += 1
+        result = results.get(intents.get(row.effect_id, ""))
+        text = str(result.get("text", "")) if result is not None else ""
+        for sentence, happened in ((TOOK_EFFECT, True), (NO_EFFECT, False)):
+            if sentence in text:
+                by_text[happened][_key(row)] += 1
+    return by_row, by_text
+
+
+def _key(row: Effect) -> tuple[str, str]:
+    return (row.action.tool, canonical_json(row.action.args))
+
+
+def _call_id_at(events: Sequence[Event], reply_seq: int, call_index: int) -> str:
+    (reply,) = [e for e in events if e.seq == reply_seq]
+    found = [part for part in _parts(reply) if part.get("kind") == "tool_call"]
+    return str(found[call_index]["id"])

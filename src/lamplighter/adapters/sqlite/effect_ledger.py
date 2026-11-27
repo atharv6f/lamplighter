@@ -38,7 +38,6 @@ _EFFECT_V = 1
 _INSERT = (
     "INSERT INTO effects (effect_key, v, session_id, state, action, probe, undo,"
     " begun_at) VALUES (?, ?, ?, 'intended', ?, ?, ?, ?)"
-    " ON CONFLICT (effect_key) DO NOTHING RETURNING effect_id"
 )
 
 
@@ -74,19 +73,20 @@ class SqliteEffectLedger:
         )
 
         def body(connection: sqlite3.Connection) -> Begun | Failure:
-            made = connection.execute(_INSERT, values).fetchall()
-            row = connection.execute(
-                f"SELECT {_COLUMNS} FROM effects WHERE effect_key = ?",
-                (action.effect_key,),
-            ).fetchone()
-            effect = _parsed(row)
-            if isinstance(effect, Failure):
-                return effect
-            if made:
-                return Begun(effect=effect, is_new=True)
-            if effect.action != as_saved(Action, action):
+            # Look first: an insert that meets its key still uses up an id
+            # in SQLite, even with "do nothing", and the ids would have gaps.
+            saved = _effect_with_key(connection, action.effect_key)
+            if saved is None:
+                connection.execute(_INSERT, values)
+                made = _effect_with_key(connection, action.effect_key)
+                if made is None:
+                    raise ValueError("a row just inserted is there")
+                return made if isinstance(made, Failure) else Begun(made, is_new=True)
+            if isinstance(saved, Failure):
+                return saved
+            if saved.action != as_saved(Action, action):
                 return _conflict("A different action is saved under this key.")
-            return Begun(effect=effect, is_new=False)
+            return Begun(effect=saved, is_new=False)
 
         return write(self._connection, _SOURCE, body)
 
@@ -188,6 +188,15 @@ def _effect_with_id(
 ) -> Effect | Failure | None:
     row = connection.execute(
         f"SELECT {_COLUMNS} FROM effects WHERE effect_id = ?", (effect_id,)
+    ).fetchone()
+    return None if row is None else _parsed(row)
+
+
+def _effect_with_key(
+    connection: sqlite3.Connection, effect_key: str
+) -> Effect | Failure | None:
+    row = connection.execute(
+        f"SELECT {_COLUMNS} FROM effects WHERE effect_key = ?", (effect_key,)
     ).fetchone()
     return None if row is None else _parsed(row)
 

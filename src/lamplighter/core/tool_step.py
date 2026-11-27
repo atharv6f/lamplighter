@@ -123,7 +123,7 @@ async def answer_call(
     holds for a call answered `interrupted`: the run goes on after it, and
     a run that ends a repeat must first have warned of it.
     """
-    text = _maybe_warned(view, call, _harness_text(call, harness, tools))
+    text = warned_if_repeated(view, call, _harness_text(call, harness, tools))
     result = in_run(
         view,
         utc_text(deps.clock.now()),
@@ -171,7 +171,7 @@ async def tool_payload(
         payload["tainted"] = True
     elif note is not None:
         shown = f"{shown}\n\n{note}"
-    payload["text"] = _maybe_warned(view, call, shown)
+    payload["text"] = warned_if_repeated(view, call, shown)
     return payload
 
 
@@ -223,9 +223,13 @@ def _harness_text(
             return harness_texts.out_of_time(name)
         case "not_run":
             return harness_texts.not_run(name)
+        case "unconfirmed":
+            # Only the effect step writes it, with the tool's own failure.
+            raise ValueError("a call is never answered unconfirmed by the loop")
 
 
-def _maybe_warned(view: RunView, call: OpenCall, text: str) -> str:
+def warned_if_repeated(view: RunView, call: OpenCall, text: str) -> str:
+    """Add the repeat warning to a result's text when the call deserves it."""
     if deserves_warning(view, call.index, text):
         return with_repeat_warning(text)
     return text
