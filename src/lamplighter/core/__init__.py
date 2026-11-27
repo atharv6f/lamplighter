@@ -5,6 +5,7 @@ from lamplighter.core.arguments_check import unsupported
 from lamplighter.core.chat_session import Wake, drive
 from lamplighter.core.config_id import config_id
 from lamplighter.core.cost import Prices, cost_micro_dollars
+from lamplighter.core.day_report import DayReport
 from lamplighter.core.delivery import deliver_due
 from lamplighter.core.event_types import (
     CANCELLED,
@@ -46,6 +47,7 @@ __all__ = [
     "TOOL_INTENT",
     "MODEL_RESPONSE",
     "TOOL_RESULT",
+    "DayReport",
     "Deps",
     "ModelCallEnded",
     "ModelCallStarted",

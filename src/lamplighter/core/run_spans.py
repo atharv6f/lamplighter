@@ -19,6 +19,12 @@ from lamplighter.core.event_types import (
     TOOL_INTENT,
     TOOL_RESULT,
 )
+from lamplighter.core.saved_facts import (
+    reply_failure,
+    saved_cost,
+    token_counts,
+    tool_error,
+)
 from lamplighter.ports import (
     RUN_END,
     RUN_STARTED,
@@ -234,7 +240,7 @@ def _model_attributes(step: _Step) -> dict[str, JsonValue]:
     if _text(end, "kind") == "stop" and reason is not None:
         attributes[names.FINISH_REASONS] = [reason]
     attributes.update(_usage_attributes(_object(reply, "usage")))
-    _put(attributes, names.COST, _whole(reply, "cost_micro_dollars"))
+    _put(attributes, names.COST, saved_cost(reply))
     attributes[names.TOOL_CALLS] = len(_tool_calls(step.reply))
     return attributes
 
@@ -257,10 +263,7 @@ def _usage_attributes(usage: JsonObject) -> dict[str, JsonValue]:
 def _model_error(reply: Event | None) -> str | None:
     if reply is None:
         return "no_reply"
-    end = _object(reply.payload, "end")
-    if _text(end, "kind") != "error":
-        return None
-    return _text(_object(end, "failure"), "kind")
+    return reply_failure(reply.payload)
 
 
 def _tool_span(run: _RunFacts, step: _Step, call: _Call, step_id: str) -> WholeSpan:
@@ -268,7 +271,7 @@ def _tool_span(run: _RunFacts, step: _Step, call: _Call, step_id: str) -> WholeS
     opened = _ms(call.intents[-1].at) if call.intents else None
     start, end = _timed(_ms(result.at), result.duration_ms, opened)
     tool = _vetted_tool_name(call.intents, result, step.reply)
-    error = _tool_error(result.payload)
+    error = tool_error(result.payload)
     attributes = {**run.common, **_tool_attributes(step, call, tool)}
     attributes[names.SEQ] = result.seq
     _put(attributes, names.ERROR_TYPE, error)
@@ -335,18 +338,6 @@ def _vetted_tool_name(
         return None
     name = named[0].get("name")
     return name if isinstance(name, str) else None
-
-
-def _tool_error(result: JsonObject) -> str | None:
-    # Tried in this order: the tool's own failure, the harness's answer, and
-    # a tool that ran and said it failed.
-    kind = _text(result, "failure_kind")
-    if kind is not None:
-        return kind
-    harness = _text(result, "harness")
-    if harness is not None:
-        return harness
-    return "tool_error" if result.get("is_error") is True else None
 
 
 def _step_span(
@@ -443,10 +434,8 @@ def _run_sums(steps: Sequence[_Step]) -> dict[str, JsonValue]:
     a sum with nothing to add is left out, so an unpriced run has no cost.
     """
     replies = [step.reply.payload for step in steps if step.reply is not None]
-    usages = [_object(reply, "usage") for reply in replies]
-    whole = [usage for usage in usages if _all_counts(usage) is not None]
-    saved = [_whole(reply, "cost_micro_dollars") for reply in replies]
-    costs = [cost for cost in saved if cost is not None]
+    whole = [c for c in map(token_counts, replies) if c is not None]
+    costs = [cost for cost in map(saved_cost, replies) if cost is not None]
     sums: dict[str, JsonValue] = {
         names.RUN_STEPS: len(steps),
         names.RUN_TOOL_CALLS: sum(len(_calls(step)) for step in steps),
@@ -457,23 +446,11 @@ def _run_sums(steps: Sequence[_Step]) -> dict[str, JsonValue]:
     if costs:
         sums[names.RUN_COST] = sum(costs)
     if whole:
-        counts = [_all_counts(usage) or (0, 0, 0, 0) for usage in whole]
-        sums[names.RUN_INPUT_TOKENS] = sum(u + r + w for u, r, w, _ in counts)
-        sums[names.RUN_CACHE_READ_TOKENS] = sum(r for _, r, _, _ in counts)
-        sums[names.RUN_CACHE_WRITE_TOKENS] = sum(w for _, _, w, _ in counts)
-        sums[names.RUN_OUTPUT_TOKENS] = sum(o for _, _, _, o in counts)
+        sums[names.RUN_INPUT_TOKENS] = sum(counts.input for counts in whole)
+        sums[names.RUN_CACHE_READ_TOKENS] = sum(counts.read for counts in whole)
+        sums[names.RUN_CACHE_WRITE_TOKENS] = sum(counts.written for counts in whole)
+        sums[names.RUN_OUTPUT_TOKENS] = sum(counts.output for counts in whole)
     return sums
-
-
-def _all_counts(usage: JsonObject) -> tuple[int, int, int, int] | None:
-    counts = [
-        _whole(usage, key)
-        for key in ("input_uncached", "cache_read", "cache_write", "output")
-    ]
-    uncached, read, written, output = counts
-    if uncached is None or read is None or written is None or output is None:
-        return None
-    return uncached, read, written, output
 
 
 def _timed(end: int, duration: int | None, opened: int | None) -> tuple[int, int]:

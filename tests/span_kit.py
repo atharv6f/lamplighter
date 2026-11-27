@@ -57,6 +57,7 @@ class MadeUpLog:
         duration_ms: int | None = None,
         at_ms: int | None = None,
         event_id: str | None = None,
+        cause: str | None = None,
     ) -> Event:
         """Save one event at the next position, 100 ms after the last one."""
         self._ms = self._ms + STEP_MS if at_ms is None else at_ms
@@ -74,7 +75,7 @@ class MadeUpLog:
             run_id=run_id,
             step=step,
             duration_ms=duration_ms,
-            cause=None,
+            cause=cause,
         )
         self.events.append(made)
         return made
@@ -171,6 +172,9 @@ class MadeUpRun:
         payload = cast(dict[str, Any], to_plain(made))
         if cost is not None:
             payload["cost_micro_dollars"] = cost
+        # A reply names its request as its cause, as the loop writes it.
+        asked = [e for e in self.events if e.type == "model_request"]
+        more.setdefault("cause", asked[-1].event_id if asked else None)
         return self.add("model_response", payload, duration_ms=duration_ms, **more)
 
     def intent(
