@@ -3,6 +3,7 @@
 import hashlib
 
 from lamplighter.ports.json_text import canonical_json
+from lamplighter.ports.trace_sink import SpanKind
 
 
 def event_id_for(session_id: str, seq: int) -> str:
@@ -35,6 +36,27 @@ def out_id_for(session_id: str, seq: int) -> str:
     kill enqueues the same row and the outbox keeps one.
     """
     return _hash(["out", session_id, seq])
+
+
+def trace_id_for(layout: int, session_id: str, run_id: str) -> str:
+    """Give the trace id of one run: 32 hex characters.
+
+    A run is known by its session and its run id together, because nothing
+    stops two sessions from holding the same run id. `layout` is the number
+    of the rules that make spans, so spans built under new rules never meet
+    old ones in a store that keeps the first copy of an id.
+    """
+    return _hash(["trace", layout, session_id, run_id])[:32]
+
+
+def span_id_for(layout: int, run_id: str, role: SpanKind, event_id: str) -> str:
+    """Give the id of the span made from one event in one role: 16 hex characters.
+
+    The role is there because a step and its model call are made from the
+    same event. The run id is there because an event id comes back when a
+    deleted session's id is used again, and a run id is new every time.
+    """
+    return _hash(["span", layout, run_id, role, event_id])[:16]
 
 
 def _hash(items: list[str | int]) -> str:
