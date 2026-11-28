@@ -30,6 +30,7 @@ from lamplighter.adapters.anthropic import AnthropicModel
 from lamplighter.adapters.builtin_tools import (
     BuiltinTools,
     ToolSettings,
+    WebAccess,
     closed_web,
     system_web,
 )
@@ -67,8 +68,10 @@ from lamplighter.app.chat import OFF_THIS_MAC, ChatParts, Stores, Tooling, chat
 from lamplighter.app.code_revision import REPO_ROOT, code_revision
 from lamplighter.app.config import Config, load_config
 from lamplighter.app.model_set import ModelSet
+from lamplighter.app.models_command import entry_field, list_models
 from lamplighter.app.report import day_lines
 from lamplighter.app.traces import export_spans, reset_cursor
+from lamplighter.app.weights_hash import weights_hash
 from lamplighter.bench import TrialRecord
 from lamplighter.core import SPAN_LAYOUT, UPCASTERS, portable_config_id
 from lamplighter.ports import (
@@ -165,9 +168,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         # The settings file is the bench's to load: a plan refuses one that
         # does not load, with its own line.
         return _bench(args)
+    if args.command == "models":
+        return _models(args)
     config = load_config(args.config)
     if args.command == "chat":
-        return _chat(config, args.session)
+        return _chat(config, args.session, args.private)
     if args.command == "traces":
         # Refused before the cursor is touched, so none is ever kept for an
         # address off this Mac.
@@ -200,6 +205,11 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command")
     talk = commands.add_parser("chat", help="talk to one session in the terminal")
     talk.add_argument("--session", help="carry on this session, or start it")
+    talk.add_argument(
+        "--private",
+        action="store_true",
+        help="use only models on this Mac, with web access off, from now on",
+    )
     store = commands.add_parser("store", help="look after the saved state")
     actions = store.add_subparsers(dest="action", required=True)
     actions.add_parser("sessions", help="list every session")
@@ -217,7 +227,23 @@ def _parser() -> argparse.ArgumentParser:
     report = commands.add_parser("report", help="report one day from the log")
     report.add_argument("--day", type=_day, help="the day in UTC, as YYYY-MM-DD")
     add_bench_parts(commands.add_parser("bench", help="run the bench and the gate"))
+    _add_models_parts(commands.add_parser("models", help="list the models, and more"))
     return parser
+
+
+def _add_models_parts(models: argparse.ArgumentParser) -> None:
+    # Each part names its own settings file, after the command words, so the
+    # start script can pass one that is not the default.
+    models.add_argument(
+        "--settings", dest="list_settings", type=Path, help="settings file"
+    )
+    actions = models.add_subparsers(dest="action")
+    hashed = actions.add_parser("weights-hash", help="print the hash of the weights")
+    hashed.add_argument("path", type=Path)
+    field = actions.add_parser("field", help="print one field of one model entry")
+    field.add_argument("--settings", type=Path, help="settings file")
+    field.add_argument("name")
+    field.add_argument("field")
 
 
 def _day(text: str) -> str:
@@ -229,18 +255,18 @@ def _day(text: str) -> str:
     raise argparse.ArgumentTypeError(f"not a day as YYYY-MM-DD: {text!r}")
 
 
-def _chat(config: Config, session_id: str | None) -> int:
+def _chat(config: Config, session_id: str | None, private: bool) -> int:
     key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not key and needs_key(config):
         print(NO_KEY, file=sys.stderr)
         return 1
     clock = SystemClock()
     models = build_models(config, key, clock)
-    tooling = builtin_tooling(config, clock)
     parts = chat_parts(
         config,
         models,
-        tooling,
+        builtin_tooling(config, clock, system_web()),
+        builtin_tooling(config, clock, closed_web()),
         trace_sink(config, clock),
         trace_cursor(config),
         sys.stdin.fileno(),
@@ -248,18 +274,24 @@ def _chat(config: Config, session_id: str | None) -> int:
         sys.stderr,
         code_revision(REPO_ROOT),
     )
-    return chat(config, session_id, parts)
+    return chat(config, session_id, parts, private)
 
 
-def builtin_tooling(config: Config, clock: Clock) -> Callable[[BlobStore], Tooling]:
-    """Build the built-in tools behind the wall, once their folders are made."""
+def builtin_tooling(
+    config: Config, clock: Clock, web: WebAccess
+) -> Callable[[BlobStore], Tooling]:
+    """Build the built-in tools behind the wall, once their folders are made.
+
+    `web` is how `web_fetch` reaches the web, or the closed access that
+    reaches nothing.
+    """
 
     def build(blobs: BlobStore) -> Tooling:
         tools = config.tools
         executor = SeatbeltExecutor(
             tools.work_dir, tools.scratch_dir, config.store.dir, clock
         )
-        built = BuiltinTools(tools, blobs, executor, clock, system_web())
+        built = BuiltinTools(tools, blobs, executor, clock, web)
         return Tooling(built, executor)
 
     return build
@@ -287,6 +319,7 @@ def chat_parts(
     config: Config,
     models: ModelSet,
     tooling: Callable[[BlobStore], Tooling],
+    private_tooling: Callable[[BlobStore], Tooling],
     sink: TraceSink,
     cursor: TraceCursor,
     reader: int,
@@ -297,7 +330,8 @@ def chat_parts(
     """Build a chat on the SQLite store and a terminal that reads `reader`.
 
     The chat sends the spans of its log to `sink`, and keeps how far it got
-    in `cursor`. Every run saves `revision` as the code that made it.
+    in `cursor`. Every run saves `revision` as the code that made it. A
+    private session's tools are built by `private_tooling`.
     """
     clock = SystemClock()
     ids = SystemIds()
@@ -312,6 +346,7 @@ def chat_parts(
         models.clients,
         models.health,
         tooling,
+        private_tooling,
         clock,
         ids,
         open_stores,
@@ -396,6 +431,33 @@ def trial_parts(api_key: str, revision: str) -> TrialParts:
         tools=tools,
         models=models,
     )
+
+
+def _models(args: argparse.Namespace) -> int:
+    if args.action == "weights-hash":
+        return _printed(weights_hash(args.path))
+    if args.action == "field":
+        config = load_config(args.settings or args.config)
+        return _printed(entry_field(config.models, args.name, args.field))
+    config = load_config(args.list_settings or args.config)
+    # Listing calls no model, so the Anthropic clients need no key.
+    models = build_models(config, "", SystemClock())
+
+    async def listed() -> None:
+        try:
+            await list_models(config, models.health, sys.stdout)
+        finally:
+            await models.close()
+
+    asyncio.run(listed())
+    return 0
+
+
+def _printed(answer: str | Failure) -> int:
+    if isinstance(answer, Failure):
+        return _failed(answer)
+    print(answer)
+    return 0
 
 
 def _bench(args: argparse.Namespace) -> int:

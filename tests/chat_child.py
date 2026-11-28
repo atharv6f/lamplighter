@@ -411,6 +411,8 @@ def main() -> int:
             config, ModelByRequest(numbered(acts.choose), clock, acts.model_seconds)
         ),
         _tooling(config, acts, folder / STARTED),
+        # No chat of these tests is private, and their tools reach no web.
+        _tooling(config, acts, folder / STARTED),
         SpanFileSink(folder / SPANS_SENT),
         trace_cursor(config),
         sys.stdin.fileno(),

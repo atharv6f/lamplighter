@@ -28,6 +28,7 @@ from lamplighter.core import (
     portable_config_id,
     project_while_open,
     run_intake,
+    session_is_private,
     take,
     unfinished_work,
     unsupported,
@@ -65,6 +66,9 @@ NO_WALL = (
 WAITING = (
     "Session {id} has unfinished work."
     " Carry it on with: lamplighter chat --session {id}"
+)
+PRIVATE_LINE = (
+    "This session is private: only models on this Mac are used, and web access is off."
 )
 LEAVING = "Exiting now. The next start carries on from what is saved."
 LEAVE_CODE = 130
@@ -123,11 +127,14 @@ class ChatParts:
     names the code this process runs, and every run saves it. `models` holds
     a client for each model entry of the settings, by its name, and
     `health` the health check of each that runs as a server on this Mac.
+    `private_tooling` builds the same tools with web access closed, for a
+    private session.
     """
 
     models: Mapping[str, ModelClient]
     health: Mapping[str, HealthCheck]
     tooling: Callable[[BlobStore], Tooling]
+    private_tooling: Callable[[BlobStore], Tooling]
     clock: Clock
     ids: IdSource
     open_stores: Callable[[Path], Stores | Failure]
@@ -139,13 +146,17 @@ class ChatParts:
     code_revision: str
 
 
-def chat(config: Config, session_id: str | None, parts: ChatParts) -> int:
+def chat(
+    config: Config, session_id: str | None, parts: ChatParts, private: bool = False
+) -> int:
     """Talk to one session until the input ends, and give the exit code.
 
     With no session id a new session is started. A trace store that is not
     on this Mac is refused before anything is made. The store folder is
     made and locked before the store is opened, so a second process is
-    refused before it touches anything.
+    refused before it touches anything. `private` keeps every call of the
+    session on this Mac. A session that was private once stays so, with or
+    without it.
     """
     if session_id is not None and not is_id(session_id):
         return _refused(f"The session id {session_id!r} breaks the id rule.", parts)
@@ -156,7 +167,7 @@ def chat(config: Config, session_id: str | None, parts: ChatParts) -> int:
     if held is None:
         return _refused(LOCK_HELD, parts)
     try:
-        return _open_and_serve(config, folder, session_id, parts)
+        return _open_and_serve(config, folder, session_id, private, parts)
     finally:
         # The process ends straight after, which would free the lock too.
         # Freeing it here lets a test hold more than one chat in a process.
@@ -164,7 +175,11 @@ def chat(config: Config, session_id: str | None, parts: ChatParts) -> int:
 
 
 def _open_and_serve(
-    config: Config, folder: Path, session_id: str | None, parts: ChatParts
+    config: Config,
+    folder: Path,
+    session_id: str | None,
+    private: bool,
+    parts: ChatParts,
 ) -> int:
     stores = parts.open_stores(folder)
     if isinstance(stores, Failure):
@@ -173,11 +188,26 @@ def _open_and_serve(
         refused = make_tool_folders(config.tools)
         if refused is not None:
             return _refused(refused, parts)
-        tooling = parts.tooling(stores.blobs)
+        # Read before the tools are built, so a private session never gets
+        # the web, even for a moment.
+        was_private = asyncio.run(_was_private(stores, session_id))
+        if isinstance(was_private, Failure):
+            return _refused(was_private.message, parts)
+        private = private or was_private
+        build = parts.private_tooling if private else parts.tooling
+        tooling = build(stores.blobs)
         check_schemas(tooling.tools)
-        return asyncio.run(_serve(config, stores, tooling, session_id, parts))
+        served = _serve(config, stores, tooling, session_id, private, parts)
+        return asyncio.run(served)
     finally:
         stores.close()
+
+
+async def _was_private(stores: Stores, session_id: str | None) -> bool | Failure:
+    if session_id is None:
+        return False
+    events = await stores.log.read(session_id, 0)
+    return events if isinstance(events, Failure) else session_is_private(events)
 
 
 async def _serve(
@@ -185,6 +215,7 @@ async def _serve(
     stores: Stores,
     tooling: Tooling,
     session_id: str | None,
+    private: bool,
     parts: ChatParts,
 ) -> int:
     waiting = await _waiting_elsewhere(stores, session_id)
@@ -195,6 +226,8 @@ async def _serve(
         session_id = parts.ids.new_id()
         parts.writer.write(f"Session {session_id}\n")
     terminal = parts.terminal(session_id)
+    if private:
+        terminal.show_line(PRIVATE_LINE)
     if unsettled:
         terminal.show_line(UNSETTLED.format(n=unsettled))
     for other in others:
@@ -220,7 +253,7 @@ async def _serve(
     projector = TraceProjector(stores.log, parts.sink, parts.cursor)
     failed = await _talk(
         session_id,
-        run_spec(config, tooling, parts.code_revision, private=False),
+        run_spec(config, tooling, parts.code_revision, private),
         deps,
         terminal,
         tooling.executor,

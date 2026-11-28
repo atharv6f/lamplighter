@@ -10,6 +10,7 @@ import dataclasses
 import io
 import os
 import signal
+import socket
 import stat
 import sys
 import threading
@@ -19,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
 from lamplighter.adapters import (
@@ -27,6 +29,7 @@ from lamplighter.adapters import (
     ScriptedTools,
     SystemClock,
 )
+from lamplighter.adapters.builtin_tools import WebAccess, closed_web
 from lamplighter.adapters.in_memory import (
     InMemoryBlobStore,
     InMemoryTraceCursor,
@@ -138,6 +141,7 @@ def parts_for(
     return chat_parts(
         config,
         model_set(config, ModelByRequest(choose)),
+        tooling_for(config, StubTools(SystemClock()), answer),
         tooling_for(config, StubTools(SystemClock()), answer),
         sink or InMemoryTraceSink(),
         cursor or InMemoryTraceCursor(),
@@ -589,7 +593,7 @@ def test_the_run_spec_holds_the_models_and_the_routes_of_the_settings(
 def test_main_builds_the_seven_built_in_tools_behind_the_wall(tmp_path: Path) -> None:
     config = config_in(tmp_path)
     Path(config.tools.work_dir).mkdir()
-    built = builtin_tooling(config, SystemClock())(InMemoryBlobStore(10))
+    built = builtin_tooling(config, SystemClock(), closed_web())(InMemoryBlobStore(10))
     assert [entry.spec.name for entry in built.tools.list_tools()] == [
         "edit_file",
         "read_file",
@@ -602,6 +606,31 @@ def test_main_builds_the_seven_built_in_tools_behind_the_wall(tmp_path: Path) ->
     assert built.executor.wall()["adapter"] == "seatbelt"
 
 
+def test_the_built_in_tools_reach_the_web_only_through_the_access_given(
+    tmp_path: Path,
+) -> None:
+    config = config_in(tmp_path)
+    Path(config.tools.work_dir).mkdir()
+    asked: list[str] = []
+
+    async def resolve(host: str, port: int) -> tuple[str, ...]:
+        del port
+        asked.append(host)
+        raise socket.gaierror(socket.EAI_NONAME, "Made-up: no such name.")
+
+    def transport() -> httpx.AsyncBaseTransport:
+        raise AssertionError("no fetch gets past the lookup")
+
+    web = WebAccess(resolve=resolve, transport=transport)
+    built = builtin_tooling(config, SystemClock(), web)(InMemoryBlobStore(10))
+    fetched = asyncio.run(
+        built.tools.call("web_fetch", {"url": "https://made-up.example/"})
+    )
+    assert not isinstance(fetched, Failure)
+    assert fetched.is_error
+    assert asked == ["made-up.example"]
+
+
 def test_the_chat_starts_on_the_real_tools_before_their_folders_exist(
     tmp_path: Path,
 ) -> None:
@@ -612,7 +641,8 @@ def test_the_chat_starts_on_the_real_tools_before_their_folders_exist(
     parts = chat_parts(
         config,
         model_set(config, ModelByRequest(answers)),
-        builtin_tooling(config, SystemClock()),
+        builtin_tooling(config, SystemClock(), closed_web()),
+        builtin_tooling(config, SystemClock(), closed_web()),
         InMemoryTraceSink(),
         InMemoryTraceCursor(),
         keyboard.reader,
@@ -652,6 +682,7 @@ def test_a_tool_whose_schema_the_check_cannot_read_stops_the_start(
         parts = chat_parts(
             config,
             model_set(config, ModelByRequest(answers)),
+            tooling_for(config, tools),
             tooling_for(config, tools),
             InMemoryTraceSink(),
             InMemoryTraceCursor(),

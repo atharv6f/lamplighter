@@ -1,7 +1,7 @@
 """Chooses the run's model when it has none or a signal stands, and saves the choice."""
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 from lamplighter.core.event_types import ROUTE_DECIDED
 from lamplighter.core.model_choice import (
@@ -24,6 +24,12 @@ from lamplighter.ports import Failure, HealthCheck, JsonObject, ModelProfile, ut
 # The loop's own bound on all the health checks of one step. Each check
 # promises an answer within two seconds; this is the backstop behind that.
 _HEALTH_SECONDS = 2.0
+_LATE = Failure(
+    kind="unavailable",
+    effect="none",
+    message="The health check did not answer within two seconds.",
+    source="route_step",
+)
 
 
 def is_private(view: RunView, spec: RunSpec) -> bool:
@@ -57,7 +63,10 @@ async def route_step(
     route = route_for(spec.routes, private)
     known = profiles(spec)
     asked = [name for _, name in allowed(route, known, private) if name in deps.health]
-    answers = await _health(deps.health, asked)
+    answers = {
+        name: "up" if answer is None else answer.kind
+        for name, answer in (await ask_health(deps.health, asked)).items()
+    }
     call = ModelCall(private, view.session_size, spec.model_max_output)
     position = None if view.route is None else view.route.position
     up = {name: answer == "up" for name, answer in answers.items()}
@@ -78,23 +87,21 @@ async def route_step(
     return saved if isinstance(saved, Failure) else answer
 
 
-async def _health(
-    checks: Mapping[str, HealthCheck], names: list[str]
-) -> dict[str, str]:
-    """Ask each named check at once. Give "up" or the failure's kind for each."""
+async def ask_health(
+    checks: Mapping[str, HealthCheck], names: Sequence[str]
+) -> dict[str, Failure | None]:
+    """Ask each named check at once, and give each one's answer.
+
+    A check that has not answered within two seconds is stopped, and its
+    answer is `unavailable`. No check is left running after this returns.
+    """
     tasks = {name: asyncio.create_task(checks[name].health()) for name in names}
     if tasks:
         await asyncio.wait(tasks.values(), timeout=_HEALTH_SECONDS)
     late = [task for task in tasks.values() if not task.done()]
     for task in late:
         task.cancel()
-    # Waited for, so no check is left running behind the step.
     await asyncio.gather(*late, return_exceptions=True)
-    answers: dict[str, str] = {}
-    for name, task in tasks.items():
-        if task in late:
-            answers[name] = "unavailable"
-            continue
-        answer = task.result()
-        answers[name] = "up" if answer is None else answer.kind
-    return answers
+    return {
+        name: _LATE if task in late else task.result() for name, task in tasks.items()
+    }

@@ -528,7 +528,8 @@ def test_the_prompt_front_is_that_of_a_chat_on_the_same_settings_file(
     parts = chat_parts(
         config,
         model_set(config, in_chat),
-        builtin_tooling(config, SystemClock()),
+        builtin_tooling(config, SystemClock(), closed_web()),
+        builtin_tooling(config, SystemClock(), closed_web()),
         InMemoryTraceSink(),
         InMemoryTraceCursor(),
         typed(b"Hello.\n").reader,
