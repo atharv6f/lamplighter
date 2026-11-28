@@ -1,5 +1,18 @@
 """The bench's own rules, as pure functions on plain values."""
 
+from lamplighter.bench.gate import (
+    COST_GUARD,
+    MOST_TASKS,
+    ChangedTask,
+    GateDecision,
+    GateOutcome,
+    GateWhy,
+    GuardResult,
+    SideSummary,
+    compare,
+)
+from lamplighter.bench.gate_rule import GateGuards, GateRule, gate_rule, rule_hash
+from lamplighter.bench.interval import T_THOUSANDTHS, half_width_bp, mean_bp
 from lamplighter.bench.outcome import (
     OutcomeKind,
     OutcomeReason,
@@ -16,6 +29,7 @@ from lamplighter.bench.run_set import (
     TrialResult,
     run_set,
 )
+from lamplighter.bench.sign_flip import SignCounts, sign_counts
 from lamplighter.bench.trial_record import (
     BoundWord,
     InfraReason,
@@ -28,7 +42,19 @@ from lamplighter.bench.trial_record import (
 )
 
 __all__ = [
+    "COST_GUARD",
     "HARNESS",
+    "MOST_TASKS",
+    "T_THOUSANDTHS",
+    "ChangedTask",
+    "GateDecision",
+    "GateGuards",
+    "GateOutcome",
+    "GateRule",
+    "GateWhy",
+    "GuardResult",
+    "SideSummary",
+    "SignCounts",
     "BoundWord",
     "InfraReason",
     "NotWhole",
@@ -43,9 +69,15 @@ __all__ = [
     "TrialRecord",
     "TrialResult",
     "check_outcome",
+    "compare",
+    "gate_rule",
+    "half_width_bp",
     "harness_outcome",
     "infra_reason",
+    "mean_bp",
     "read_record",
     "record_text",
+    "rule_hash",
     "run_set",
+    "sign_counts",
 ]
