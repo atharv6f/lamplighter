@@ -56,10 +56,16 @@ class Executor(Protocol):
     - When `run` returns, the command and every process still in its group
       are dead. A child that left the group is not.
     - The command sees exactly the variables in `env`.
-    - Under `workspace_write`, a write outside the work folder and the
-      scratch folder fails. Under `read_only`, every write fails, but for
-      `/dev/null`. A command has no network. The store's folder cannot be
-      read or written from inside.
+    - What a command may touch is set by the wall, and `wall()` names it.
+      Behind the macOS sandbox: under `workspace_write`, a write outside the
+      work folder and the scratch folder fails. Under `read_only`, every
+      write fails, but for `/dev/null`. Behind a container: a command sees
+      the container's own files, the work folder and the scratch folder,
+      and nothing else of the machine the harness runs on. It runs as a
+      user that is not root where the harness itself is not root. A write
+      outside the work folder lands in the container and is deleted with
+      it. `read_only` is not enforced there. Behind both: a command has no
+      network, and the store's folder cannot be read or written from inside.
     - If the wall cannot be put up, nothing runs and `run` gives
       `unavailable`. No path runs a command without the wall.
     - Output is counted while the command runs, and at `capture_bytes` the
@@ -69,12 +75,17 @@ class Executor(Protocol):
     - A non-zero exit, a time out and a flood are results. A `Failure` means
       the command was not started: `unavailable`, or `invalid_input` for a
       `cwd` outside the work folder, an empty `argv`, a limit below 1, or an
-      argument or variable that holds a zero byte or is not UTF-8.
+      argument or variable that holds a zero byte or is not UTF-8. The one
+      exception is `unavailable` with `effect` `unknown`: the adapter lost
+      touch with the wall and cannot say whether the command ran.
     - `wall()` gives the same record of plain values for the life of the
       process, saying which wall this is.
     - After `kill_all()`, no command that a `run` in this process started is
       alive. It does not wait, so a harness may call it just before it
-      leaves at once.
+      leaves at once. Behind a container the kill is sent and not waited
+      for: each `run` that is going then ends with a result that says
+      killed. For a harness that leaves in the same instant, the end of the
+      container is the backstop.
     """
 
     async def run(self, command: Command) -> ExecResult | Failure:

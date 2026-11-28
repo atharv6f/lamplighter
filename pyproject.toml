@@ -45,16 +45,17 @@ typeCheckingMode = "strict"
 testpaths = ["tests"]
 # Tests marked "live" call the real API and cost money, tests marked "crash"
 # kill a process 200 times and take minutes, tests marked "sandbox" need
-# macOS's sandbox-exec, and tests marked "phoenix" start the pinned Phoenix,
-# about 700 MB once installed, so the default run leaves all four out.
-# "-m live", "-m crash", "-m sandbox" or "-m phoenix" on the command line
-# runs them.
-addopts = "-m 'not live and not crash and not sandbox and not phoenix'"
+# macOS's sandbox-exec, tests marked "phoenix" start the pinned Phoenix,
+# about 700 MB once installed, and tests marked "container" need Docker, so
+# the default run leaves all five out. "-m live", "-m crash", "-m sandbox",
+# "-m phoenix" or "-m container" on the command line runs them.
+addopts = "-m 'not live and not crash and not sandbox and not phoenix and not container'"
 markers = [
     "live: calls the real Anthropic API and needs ANTHROPIC_API_KEY",
     "crash: kills a process that writes to a real store, 200 times",
     "sandbox: runs commands behind the real wall and needs macOS's sandbox-exec",
     "phoenix: starts the pinned Phoenix through scripts/phoenix/start.sh",
+    "container: runs commands in a Docker container of the pinned image",
 ]
 
 [tool.importlinter]
