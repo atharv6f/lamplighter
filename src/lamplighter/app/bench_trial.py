@@ -20,6 +20,7 @@ from lamplighter.app.config import Config, load_config
 from lamplighter.app.model_set import ModelSet
 from lamplighter.app.work_bounds import out_of_bounds
 from lamplighter.bench import (
+    OUTPUT_FAULT,
     BoundWord,
     InfraReason,
     Tokens,
@@ -201,7 +202,7 @@ async def _with_built(
     summary = None if isinstance(events, Failure) else run_summary(events)
     ends = TrialEnds(
         run_reason=None if ended is None or summary is None else summary.reason,
-        run_detail=None if summary is None else summary.detail,
+        run_detail=_graded_detail(summary),
         command_unavailable=built.executor.broken is not None,
         swept=swept,
         exported=True,
@@ -301,7 +302,9 @@ def _record(
         session_id=SESSION,
         run_id=None if summary is None else summary.run_id,
         run_reason=None if summary is None else summary.reason,
-        run_detail=None if summary is None else summary.detail,
+        run_detail=_graded_detail(summary),
+        models_called=() if summary is None else summary.models_called,
+        escalated=False if summary is None else summary.escalated,
         gradable=reason is None,
         infra_reason=reason,
         left_out_of_bounds=left,
@@ -312,6 +315,17 @@ def _record(
         ms=int((parts.clock.monotonic() - began) * 1000),
         exported_events=exported_events,
     )
+
+
+def _graded_detail(summary: RunSummary | None) -> str | None:
+    # A run that failed on a reply the end checks refused is named by what
+    # they found, so the grade can tell it from an outage of the server. A
+    # run killed after that reply and before its end keeps no detail.
+    if summary is None:
+        return None
+    if summary.reason == "failed" and summary.output_fault is not None:
+        return f"{OUTPUT_FAULT}{summary.output_fault}"
+    return summary.detail
 
 
 def _written(harness: Path, record: TrialRecord) -> TrialRecord:

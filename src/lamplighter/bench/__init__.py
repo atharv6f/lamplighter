@@ -57,6 +57,7 @@ from lamplighter.bench.split import DEV_PLACES, Split, split
 from lamplighter.bench.task_rules import GROUPS, PINNED_IMAGE, REQUIRED, task_faults
 from lamplighter.bench.task_set import TaskFile, task_set_hash
 from lamplighter.bench.trial_record import (
+    OUTPUT_FAULT,
     BoundWord,
     InfraReason,
     Tokens,
@@ -69,6 +70,7 @@ from lamplighter.bench.trial_record import (
 
 __all__ = [
     "HARD",
+    "OUTPUT_FAULT",
     "AdapterPerRequest",
     "BakeoffChoice",
     "BakeoffRule",

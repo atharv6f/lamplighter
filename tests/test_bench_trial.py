@@ -73,6 +73,14 @@ FETCH = ScriptedReply(
     USAGE,
 )
 type Turn = ScriptedReply | ScriptedBreak
+# A reply the adapter's end checks refused for call markup in its text.
+MARKUP = Failure(
+    kind="transient",
+    effect="none",
+    message="Made-up markup.",
+    source="openai_chat",
+    detail={"model_output": "call_markup"},
+)
 SPENT = TrialRecord(
     portable_config_id="p" * 64,
     config_id="c" * 64,
@@ -314,6 +322,12 @@ def test_the_one_message_comes_from_the_bench(tmp_path: Path) -> None:
             ("failed", "model_unavailable"),
             "model_unavailable",
         ),
+        (
+            (ScriptedBreak((), MARKUP),),
+            {},
+            ("failed", "model_output:call_markup"),
+            None,
+        ),
     ],
 )
 def test_each_ending_of_the_run_gives_its_side(
@@ -328,6 +342,12 @@ def test_each_ending_of_the_run_gives_its_side(
     assert (record.run_reason, record.run_detail) == run
     assert (record.gradable, record.infra_reason) == (reason is None, reason)
     assert trial.saved() == record
+
+
+def test_the_record_names_the_models_the_run_asked(tmp_path: Path) -> None:
+    trial = Trial(tmp_path, quick_settings())
+    record = trial.run(playing(SHELL, DONE))
+    assert (record.models_called, record.escalated) == (("frontier",), False)
 
 
 # The stops before the run, which call no model.

@@ -166,3 +166,27 @@ def test_a_record_without_a_field_is_none() -> None:
     plain = json.loads(record_text(RECORD))
     del plain["ms"]
     assert read_record(json.dumps(plain)) is None
+
+
+def test_a_record_kept_before_the_models_were_named_reads_with_none_named() -> None:
+    plain = json.loads(record_text(RECORD))
+    del plain["models_called"]
+    del plain["escalated"]
+    assert read_record(json.dumps(plain)) == RECORD
+
+
+def test_the_models_asked_and_an_escalation_read_back() -> None:
+    asked = dataclasses.replace(
+        RECORD, models_called=("local", "frontier"), escalated=True
+    )
+    assert read_record(record_text(asked)) == asked
+    assert read_record(changed(models_called="local")) is None
+    assert read_record(changed(escalated="yes")) is None
+
+
+@pytest.mark.parametrize("fault", ["call_markup", "schema", "no_call"])
+def test_a_reply_the_end_checks_refused_is_the_agents_fail(fault: str) -> None:
+    ended = dataclasses.replace(
+        WELL, run_reason="failed", run_detail=f"model_output:{fault}"
+    )
+    assert infra_reason(ended) is None
