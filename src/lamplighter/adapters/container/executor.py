@@ -35,10 +35,15 @@ _SMALL_CALL_SECONDS = 20
 _SWEEP_PASSES = 5
 _LIST = "printf '%s ' $$; for p in /proc/[0-9]*; do printf '%s ' \"${p#/proc/}\"; done"
 # Counts every process that `mark` did not keep and that is not a zombie,
-# whether its kill arrived or it was gone a moment after it was listed, so
-# a pass counts nothing only in a quiet container. A zombie has ended and
-# cannot be killed, so counting it would never reach nothing.
+# whether its kill arrived or it was gone a moment after it was listed. A
+# zombie has ended and cannot be killed, so counting it would never reach
+# nothing. A process that forks can slip past the listing when its new id
+# wraps around to one the listing has passed, so a pass that saw any new
+# process id given out, in the last field of /proc/loadavg, counts one
+# more. The pass itself starts no process. So it counts nothing only in a
+# quiet container.
 _SWEEP = r"""keep=" KEPT "; n=0
+read -r _ _ _ _ first </proc/loadavg
 for p in /proc/[0-9]*; do
   p=${p#/proc/}
   case "$keep" in *" $p "*) continue;; esac
@@ -49,6 +54,8 @@ for p in /proc/[0-9]*; do
   kill -KILL "$p" 2>/dev/null
   n=$((n + 1))
 done
+read -r _ _ _ _ last </proc/loadavg
+[ "$last" = "$first" ] || n=$((n + 1))
 echo "swept $n"
 """
 

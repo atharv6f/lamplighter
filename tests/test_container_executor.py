@@ -354,6 +354,12 @@ def lives(stamp: Path) -> bool:
     return (stamp.read_text() if stamp.exists() else "") != first
 
 
+def any_lives(stamps: list[Path]) -> bool:
+    first = [stamp.read_text() if stamp.exists() else "" for stamp in stamps]
+    time.sleep(0.5)
+    return [stamp.read_text() if stamp.exists() else "" for stamp in stamps] != first
+
+
 def processes_of(container: RunningContainer, user: int) -> int:
     line = (
         "n=0; for p in /proc/[0-9]*; do read -r l <$p/stat 2>/dev/null || continue;"
@@ -408,22 +414,26 @@ def test_the_sweep_kills_fork_chains_and_says_so(
         assert not any(lives(stamp) for stamp in stamps)
 
 
+# A chain slips past a pass only when its new process id wraps around past
+# the pass's listing, so each run asks for several sweeps while it lives.
+@pytest.mark.parametrize("chains", [1, 6])
 def test_with_root_as_the_command_user_the_sweep_is_never_true_with_a_chain_alive(
-    own: RunningContainer, work: Path
+    own: RunningContainer, work: Path, chains: int
 ) -> None:
     (work / "chain.py").write_text(CHAIN)
-    stamp = work / "stamp"
-    for _ in range(12):
+    stamps = [work / f"stamp{i}" for i in range(chains)]
+    start = " ".join(
+        f"(python3 chain.py {stamp} >/dev/null 2>&1 &);" for stamp in stamps
+    )
+    for _ in range(20):
         executor = contained(own, work, user=(0, 0))
         assert asyncio.run(executor.mark())
-        ran(
-            executor,
-            shell(work, f"(python3 chain.py {stamp} >/dev/null 2>&1 &); sleep 0.3"),
-        )
-        swept = asyncio.run(executor.sweep())
-        alive = lives(stamp)
-        assert not (swept and alive)
-        if alive:
+        ran(executor, shell(work, f"{start} sleep 0.3"))
+        for _ in range(5):
+            if asyncio.run(executor.sweep()):
+                assert not any_lives(stamps)
+                break
+        if any_lives(stamps):
             own.inside(_FREEZE_ALL_BUT_THE_FIRST)
 
 
