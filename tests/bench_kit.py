@@ -26,6 +26,7 @@ from lamplighter.ports import (
     HarnessAgentSpec,
     Job,
     LedgerRow,
+    ReferenceAgentSpec,
     TrialFacts,
     canonical_json,
 )
@@ -243,8 +244,7 @@ def _harness_only(job: Job, task: str, attempt: int) -> TrialRecord | None:
 
 
 def _right_check(job: Job, task: str, attempt: int) -> CheckEnd:
-    agent = job.agent
-    return "passed" if getattr(agent, "name", "") == "oracle" else "failed"
+    return "passed" if isinstance(job.agent, ReferenceAgentSpec) else "failed"
 
 
 def _side(row: LedgerRow) -> str:

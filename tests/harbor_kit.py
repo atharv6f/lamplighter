@@ -28,6 +28,7 @@ HARBOR = REPO_ROOT / "bench" / "harbor"
 TASKS = REPO_ROOT / "tests" / "harbor_tasks"
 SHARED_FOLDER = "harbor_shim.environment:SharedFolderDocker"
 HARNESS_AGENT = "harbor_shim.agent:HarnessAgent"
+REFERENCE_AGENT = "harbor_shim.reference:ReferenceAsCommandUser"
 _PROJECT = '{{.Label "com.docker.compose.project"}}'
 SHELL_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 BUDGET = 30_000_000
@@ -41,6 +42,7 @@ def harbor_paths(bench: Path, agent_class: str = HARNESS_AGENT) -> HarborPaths:
         tasks=TASKS,
         compose=HARBOR / "no_network.yaml",
         agent_class=agent_class,
+        reference_class=REFERENCE_AGENT,
         environment_class=SHARED_FOLDER,
     )
 

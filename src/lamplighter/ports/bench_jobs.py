@@ -82,7 +82,20 @@ class RunnerAgentSpec:
     options: JsonObject
 
 
-type AgentSpec = HarnessAgentSpec | RunnerAgentSpec
+@dataclass(frozen=True, slots=True)
+class ReferenceAgentSpec:
+    """The task's reference solution, run the way a trial's commands run.
+
+    It runs in a work folder seeded as the harness's is, as `run_as`, a
+    user id and a group id, so a task that only root could do fails its
+    check.
+    """
+
+    kind: Literal["reference"]
+    run_as: tuple[int, int]
+
+
+type AgentSpec = HarnessAgentSpec | RunnerAgentSpec | ReferenceAgentSpec
 
 
 @dataclass(frozen=True, slots=True)

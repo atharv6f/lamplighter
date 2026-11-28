@@ -9,7 +9,13 @@ from lamplighter.adapters.harbor_jobs.job_file import (
     job_file,
     without_pace,
 )
-from lamplighter.ports import HarnessAgentSpec, Job, JsonValue, RunnerAgentSpec
+from lamplighter.ports import (
+    HarnessAgentSpec,
+    Job,
+    JsonValue,
+    ReferenceAgentSpec,
+    RunnerAgentSpec,
+)
 
 PATHS = HarborPaths(
     start_script=Path("/made-up/repo/bench/harbor/start.sh"),
@@ -17,6 +23,7 @@ PATHS = HarborPaths(
     tasks=Path("/made-up/repo/bench/tasks"),
     compose=Path("/made-up/repo/bench/harbor/no_network.yaml"),
     agent_class="made_up_shim.agent:Agent",
+    reference_class="made_up_shim.reference:Reference",
     environment_class="made_up_shim.environment:Environment",
 )
 HARNESS = HarnessAgentSpec(
@@ -89,6 +96,29 @@ def test_the_harness_gets_the_shared_folder_the_closed_network_and_six_values() 
         ],
     }
     assert _as_json(job_file(JOB, PATHS)) == expected
+
+
+def test_the_reference_solution_gets_the_shared_folder_the_network_and_its_user() -> (
+    None
+):
+    reference = dataclasses.replace(
+        JOB, agent=ReferenceAgentSpec(kind="reference", run_as=(501, 20))
+    )
+    expected = {
+        **_common(reference),
+        "environment": {
+            "delete": True,
+            "import_path": "made_up_shim.environment:Environment",
+            "extra_docker_compose": ["/made-up/repo/bench/harbor/no_network.yaml"],
+        },
+        "agents": [
+            {
+                "import_path": "made_up_shim.reference:Reference",
+                "kwargs": {"run_as": "501:20"},
+            }
+        ],
+    }
+    assert _as_json(job_file(reference, PATHS)) == expected
 
 
 def test_a_runner_agent_with_no_model_gets_only_the_closed_network() -> None:

@@ -408,6 +408,7 @@ def harbor_jobs(bench: Path) -> HarborJobs:
             tasks=BENCH / "tasks",
             compose=harbor / "no_network.yaml",
             agent_class="harbor_shim.agent:HarnessAgent",
+            reference_class="harbor_shim.reference:ReferenceAsCommandUser",
             environment_class="harbor_shim.environment:SharedFolderDocker",
         )
     )

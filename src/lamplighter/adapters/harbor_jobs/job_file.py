@@ -9,6 +9,7 @@ from lamplighter.ports import (
     Job,
     JsonObject,
     JsonValue,
+    RunnerAgentSpec,
 )
 
 # Harbor runs no trial a second time on its own, so that a run set has
@@ -30,8 +31,9 @@ class HarborPaths:
     """Where the Harbor adapter finds what it is given, all as full paths.
 
     `bench` holds a folder per run set under `run_sets/` and Harbor's job
-    folders under `jobs/`. The two classes are import paths, as Harbor
-    takes them, of the shim's agent and environment.
+    folders under `jobs/`. The three classes are import paths, as Harbor
+    takes them, of the shim's agent, its reference solution agent and its
+    environment.
     """
 
     start_script: Path
@@ -39,6 +41,7 @@ class HarborPaths:
     tasks: Path
     compose: Path
     agent_class: str
+    reference_class: str
     environment_class: str
 
 
@@ -46,10 +49,11 @@ def job_file(job: Job, paths: HarborPaths) -> JsonObject:
     """Give the job as Harbor's job file.
 
     A task container with no network gets the compose file that takes it
-    away. Only this repo's harness gets the shared-folder environment.
+    away. Only this repo's harness, and the reference solution run as its
+    commands are, get the shared-folder environment.
     """
     environment: dict[str, JsonValue] = {"delete": True}
-    if isinstance(job.agent, HarnessAgentSpec):
+    if not isinstance(job.agent, RunnerAgentSpec):
         environment["import_path"] = paths.environment_class
     if not job.network:
         environment["extra_docker_compose"] = [str(paths.compose)]
@@ -79,6 +83,12 @@ def _agent(agent: AgentSpec, paths: HarborPaths) -> JsonObject:
                 "code_revision": agent.code_revision,
                 "run_as": f"{user}:{group}",
             },
+        }
+    if not isinstance(agent, RunnerAgentSpec):
+        user, group = agent.run_as
+        return {
+            "import_path": paths.reference_class,
+            "kwargs": {"run_as": f"{user}:{group}"},
         }
     if agent.model is None:
         return {"name": agent.name, "kwargs": agent.options}

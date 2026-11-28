@@ -7,6 +7,7 @@ from lamplighter.ports.bench_jobs import (
     HarnessAgentSpec,
     Job,
     RecordedTokens,
+    ReferenceAgentSpec,
     RunnerAgentSpec,
     TrialFacts,
 )
@@ -171,6 +172,7 @@ __all__ = [
     "row_text",
     "CheckEnd",
     "RecordedTokens",
+    "ReferenceAgentSpec",
     "TrialFacts",
     "CursorMark",
     "Span",
