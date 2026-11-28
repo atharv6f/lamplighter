@@ -182,6 +182,37 @@ class ListsTheNetwork(HarnessAgent):
     )
 
 
+class SharesFilesBothWays(HarnessAgent):
+    """Edits a file a command made, has a command change a tool's, then fixes it."""
+
+    trial = staticmethod(
+        scripted(
+            _shell("m", "echo 'made by a command' > made.txt"),
+            _calls(
+                ToolCallPart(
+                    id="e",
+                    name="edit_file",
+                    arguments={
+                        "path": "made.txt",
+                        "old_text": "by a command",
+                        "new_text": "by a command, edited by a tool",
+                    },
+                ),
+                ToolCallPart(
+                    id="w",
+                    name="write_file",
+                    arguments={"path": "tool.txt", "content": "made by a tool\n"},
+                ),
+            ),
+            _shell(
+                "c", "echo 'changed by a command' >> tool.txt; cat made.txt tool.txt"
+            ),
+            _calls(_FIX),
+            _DONE,
+        )
+    )
+
+
 class ShowsItsEnvironment(HarnessAgent):
     """Prints its own environment and that of the container's first process."""
 
