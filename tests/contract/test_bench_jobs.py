@@ -240,6 +240,8 @@ def test_a_kill_leaves_containers_that_the_next_run_removes_and_no_others(
     harbor: HarborKind,
 ) -> None:
     beside = "change-one-port__othrjob__env"
+    # Containers another run left before this test are not the kill's.
+    before = projects("container") | projects("network")
     other = subprocess.run(
         [
             "docker",
@@ -263,7 +265,7 @@ def test_a_kill_leaves_containers_that_the_next_run_removes_and_no_others(
         left = {
             p
             for p in projects("container") | projects("network")
-            if p.startswith(f"{TASK}__") and p != beside
+            if p.startswith(f"{TASK}__") and p != beside and p not in before
         }
         assert left, "the kill left nothing to remove"
         assert run(harbor.jobs.run(job)) is None
