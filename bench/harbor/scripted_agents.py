@@ -17,10 +17,11 @@ from collections.abc import Awaitable, Callable
 from harbor_shim.agent import HarnessAgent
 
 from lamplighter.adapters import ScriptedBreak, ScriptedModel, ScriptedReply
-from lamplighter.app.bench_trial import TrialModel, TrialRequest, run_trial
+from lamplighter.app.bench_trial import TrialRequest, run_trial
 from lamplighter.app.code_revision import REPO_ROOT, code_revision
 from lamplighter.app.config import Config
 from lamplighter.app.main import trial_parts
+from lamplighter.app.model_set import ModelSet
 from lamplighter.bench import TrialRecord
 from lamplighter.ports import Failure, TextPart, ToolCallPart, Usage
 
@@ -54,12 +55,16 @@ def scripted(*turns: Turn) -> Trial:
     async def trial(request: TrialRequest) -> TrialRecord:
         parts = trial_parts("", code_revision(REPO_ROOT))
 
-        def model(config: Config) -> TrialModel:
-            return TrialModel(
-                ScriptedModel(config.model, turns, random.Random(1)), _nothing
+        def models(config: Config) -> ModelSet:
+            # One script, whichever model of the settings a step asks.
+            model = ScriptedModel(
+                config.default_model().profile, turns, random.Random(1)
+            )
+            return ModelSet(
+                {entry.name: model for entry in config.models}, {}, _nothing
             )
 
-        return await run_trial(dataclasses.replace(parts, model=model), request)
+        return await run_trial(dataclasses.replace(parts, models=models), request)
 
     return trial
 
