@@ -1,6 +1,6 @@
 import pytest
 
-from lamplighter.adapters.anthropic.sse import SseEvent, SseReader
+from lamplighter.adapters.sse import SseEvent, SseReader
 
 TWO_EVENTS = b'event: first\ndata: {"a": 1}\n\nevent: second\ndata: {"b": 2}\n\n'
 EXPECTED = [SseEvent("first", '{"a": 1}'), SseEvent("second", '{"b": 2}')]

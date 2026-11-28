@@ -73,6 +73,22 @@ type = "forbidden"
 source_modules = ["lamplighter.core"]
 forbidden_modules = ["lamplighter.adapters"]
 
+# Code two adapters share lives in a file at the adapters root, never in
+# one adapter's package.
+[[tool.importlinter.contracts]]
+name = "no adapter imports another adapter's package"
+type = "independence"
+modules = [
+    "lamplighter.adapters.anthropic",
+    "lamplighter.adapters.builtin_tools",
+    "lamplighter.adapters.container",
+    "lamplighter.adapters.harbor_jobs",
+    "lamplighter.adapters.in_memory",
+    "lamplighter.adapters.phoenix",
+    "lamplighter.adapters.seatbelt",
+    "lamplighter.adapters.sqlite",
+]
+
 [[tool.importlinter.contracts]]
 name = "only adapters and app use the HTTP library"
 type = "forbidden"

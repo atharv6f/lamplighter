@@ -18,9 +18,9 @@ from lamplighter.adapters.anthropic.request import (
     render_count_request,
     render_request,
 )
-from lamplighter.adapters.anthropic.sse import SseReader
 from lamplighter.adapters.anthropic.stream import ReplyAssembler
-from lamplighter.adapters.anthropic.wire import Unreadable, parse_object, whole_in
+from lamplighter.adapters.sse import SseReader
+from lamplighter.adapters.wire_json import Unreadable, parse_object, whole_in
 from lamplighter.ports import (
     Clock,
     ErrorEvent,

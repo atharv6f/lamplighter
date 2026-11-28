@@ -5,6 +5,7 @@ from lamplighter.adapters.fake_executor import FakeExecutor
 from lamplighter.adapters.file_blob_store import BlobTotals, FileBlobStore
 from lamplighter.adapters.file_ledger import FileLedger
 from lamplighter.adapters.file_trace_cursor import FileTraceCursor
+from lamplighter.adapters.loopback_address import local_address
 from lamplighter.adapters.made_up_world import MadeUpWorld, WorldTools
 from lamplighter.adapters.recorded_model import RecordingModel, ReplayedModel
 from lamplighter.adapters.scripted_channel import ScriptedChannel
@@ -43,4 +44,5 @@ __all__ = [
     "ScriptedModel",
     "ScriptedReply",
     "SystemClock",
+    "local_address",
 ]

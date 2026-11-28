@@ -1,4 +1,4 @@
-"""The one form of Phoenix's address that is sure to stay on this Mac. Pure."""
+"""The one form of an address on this Mac that is sure to stay on it. Pure."""
 
 import re
 

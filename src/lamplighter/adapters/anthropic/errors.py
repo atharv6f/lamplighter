@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from lamplighter.adapters.anthropic.blocks import ADAPTER
-from lamplighter.adapters.anthropic.wire import Unreadable, as_object, parse_object
+from lamplighter.adapters.wire_json import Unreadable, as_object, parse_object
 from lamplighter.ports import Failure, FailureKind, JsonValue
 
 _KIND_BY_ERROR_TYPE: dict[str, FailureKind] = {

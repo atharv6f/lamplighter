@@ -24,6 +24,7 @@ from lamplighter.adapters import (
     SystemClock,
     SystemIds,
     TerminalChannel,
+    local_address,
 )
 from lamplighter.adapters.anthropic import AnthropicModel
 from lamplighter.adapters.builtin_tools import (
@@ -35,7 +36,7 @@ from lamplighter.adapters.builtin_tools import (
 from lamplighter.adapters.container import AsRoot, ContainerExecutor
 from lamplighter.adapters.harbor_jobs import HarborJobs, HarborPaths
 from lamplighter.adapters.in_memory import InMemoryBlobStore
-from lamplighter.adapters.phoenix import PhoenixSink, local_address
+from lamplighter.adapters.phoenix import PhoenixSink
 from lamplighter.adapters.seatbelt import SeatbeltExecutor
 from lamplighter.adapters.sqlite import (
     SqliteEffectLedger,
