@@ -34,6 +34,7 @@ DOCKERFILE = f"""\
 FROM {PINNED_IMAGE}
 WORKDIR /app
 COPY files/ /app/
+RUN mkdir -p -m 755 /opt/vendor
 COPY --chmod=644 outside/LICENSE /opt/vendor/LICENSE
 RUN /app/prepare.sh
 """
@@ -152,6 +153,8 @@ def test_a_task_toml_with_a_free_line_wrong(old: str, new: str, word: str) -> No
         ("COPY --chmod=644 outside/LICENSE", "COPY --chmod=644"),
         ("COPY --chmod=644 outside/", "COPY outside/"),
         ("WORKDIR /app", "WORKDIR /app\nENV MADE_UP=1"),
+        ("RUN mkdir -p -m 755 /opt/vendor\n", ""),
+        ("RUN mkdir -p -m 755 /opt/vendor", "RUN mkdir -p -m 755 /opt/other"),
     ],
 )
 def test_a_dockerfile_line_it_may_not_have(old: str, new: str) -> None:
@@ -165,6 +168,32 @@ def test_a_run_of_a_single_file_copied_in_is_allowed() -> None:
     assert _faults(environment__Dockerfile=one) == ()
     named = one.replace("files/prepare.sh /app/", "files/prepare.sh /app/prepare.sh")
     assert _faults(environment__Dockerfile=named) == ()
+
+
+def test_a_file_from_outside_may_go_in_a_folder_named_with_a_slash() -> None:
+    slashed = DOCKERFILE.replace("/opt/vendor/LICENSE", "/opt/vendor/")
+    assert _faults(environment__Dockerfile=slashed) == ()
+
+
+@pytest.mark.parametrize(
+    "made", ["mkdir -p -m 700 /opt/vendor", "mkdir -p /opt/vendor"]
+)
+def test_a_folder_made_in_another_way_is_a_line_it_may_not_have(made: str) -> None:
+    other = DOCKERFILE.replace("mkdir -p -m 755 /opt/vendor", made)
+    assert _faults(environment__Dockerfile=other) == (
+        f"The Dockerfile has a line it may not have: RUN {made}",
+        "A COPY of outside/LICENSE needs RUN mkdir -p -m 755 /opt/vendor before it.",
+    )
+
+
+def test_a_folder_made_after_the_copy_is_too_late() -> None:
+    late = DOCKERFILE.replace("RUN mkdir -p -m 755 /opt/vendor\n", "").replace(
+        "RUN /app/prepare.sh", "RUN mkdir -p -m 755 /opt/vendor\nRUN /app/prepare.sh"
+    )
+    faults = _faults(environment__Dockerfile=late)
+    assert faults == (
+        "A COPY of outside/LICENSE needs RUN mkdir -p -m 755 /opt/vendor before it.",
+    )
 
 
 def test_a_comment_and_a_blank_line_in_the_dockerfile_are_allowed() -> None:
