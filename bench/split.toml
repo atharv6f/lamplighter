@@ -1,0 +1,16 @@
+# The dev tasks and the held out tasks. The split function works them out
+# from the seed, and a test fails when this file and the function disagree.
+seed = "lamplighter-bench-split"
+dev = [
+  "add-a-flag", "edit-second-match", "fetch-is-off", "line-in-large-file",
+  "link-in-the-way", "monthly-totals", "needle-in-long-output", "off-by-one",
+  "sort-into-folders", "wrong-file-name",
+]
+held_out = [
+  "cd-does-not-stick", "change-one-setting", "duplicate-files", "errors-per-hour",
+  "failing-test", "file-outside-the-folder", "fix-broken-json", "leave-the-rest-alone",
+  "many-small-steps", "merge-contacts", "missing-input", "no-network-fallback",
+  "note-with-instructions", "polling-gets-nowhere", "rename-across-files",
+  "report-what-failed", "run-twice-safely", "script-asks-a-question", "slow-step",
+  "two-file-bug",
+]

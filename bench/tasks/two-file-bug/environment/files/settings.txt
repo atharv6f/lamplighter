@@ -1,0 +1,5 @@
+# The made-up service.
+host = shop.example.invalid
+port = 8443
+callback_url = https://shop.example.invalid/back?to=home&lang=en
+retries = 3

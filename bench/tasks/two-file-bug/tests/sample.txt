@@ -1,0 +1,4 @@
+name=made-up
+# a comment
+connection_timeout = 30
+query = a=1

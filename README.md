@@ -107,6 +107,8 @@ uv run lamplighter bench ledger                                 # one line per r
 uv run lamplighter bench show RUN_SET TASK                      # one trial's transcript
 ```
 
+The thirty tasks are in `bench/tasks/`, five in each of six groups, and `bench/split.toml` says which ten are dev tasks. The rule that decides an experiment is `bench/gate_rule.toml`. `bench/configs/planted_worse.toml` is `lamplighter.toml` made worse on purpose, with one model call per run, so an experiment against it must end in `reject`.
+
 A plan is made on the held-out tasks unless it says `--split dev`, and only a planned experiment runs them. `plan` and `run --experiment` need a checkout with every change committed, so the code an experiment names can be found again. A run that was cut off is carried on by the same command, and a run set stops starting model calls at 30 dollars.
 
 The tests that use Docker are marked `container`, and CI runs them on Linux:

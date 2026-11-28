@@ -1,0 +1,24 @@
+schema_version = "1.4"
+# The check runs in a second container, on a copy of this folder.
+artifacts = ["/app"]
+
+[task]
+name = "lamplighter-bench/line-in-large-file"
+description = "Find one line in a log of 30,000 lines."
+
+[metadata]
+group = "files"
+drawn_from = "paging through a long file, and the search tool"
+
+[agent]
+# The run's own limit is 1,200 seconds. This one is the backstop behind it.
+timeout_sec = 1500.0
+
+[verifier]
+timeout_sec = 300.0
+environment_mode = "separate"
+
+[environment]
+build_timeout_sec = 600.0
+cpus = 1
+memory_mb = 1024
