@@ -1,13 +1,18 @@
 """Made-up rows of the book of experiments, and the work of a second process on it."""
 
 import asyncio
+import dataclasses
 import itertools
 import os
 from multiprocessing.queues import Queue
 from multiprocessing.synchronize import Barrier
 from pathlib import Path
+from typing import Any
 
 from lamplighter.ports import (
+    BakeoffBody,
+    BakeoffRow,
+    BakeoffStage,
     CorrectionBody,
     CorrectionRow,
     DecisionBody,
@@ -22,12 +27,16 @@ from lamplighter.ports import (
     SplitName,
     StartBody,
     StartRow,
+    Verdict,
 )
 
 RULE_HASH = "r" * 64
 TASK_SET = "t" * 64
 BASELINE_ID = "b" * 64
 CANDIDATE_ID = "c" * 64
+BAKEOFF_RULE = "1" * 64
+CAPTURE_SET = "e" * 64
+WEIGHTS = "w" * 64
 _IDS = itertools.count(1)
 
 
@@ -159,6 +168,115 @@ def correction(corrects: str, experiment: str = "made-up") -> CorrectionRow:
         config_ids=(),
         code_revision="unknown",
         body=CorrectionBody(corrects=corrects, note="A made-up note."),
+    )
+
+
+def _bakeoff(stage: BakeoffStage, body: dict[str, Any]) -> BakeoffRow:
+    """A bake-off row of the stage, with the fields of `body` set."""
+    empty = BakeoffBody(
+        stage=stage,
+        rule={},
+        rule_hash=BAKEOFF_RULE,
+        replaces="",
+        why="",
+        capture_set_hash=CAPTURE_SET,
+        capture_counts={},
+        server="",
+        server_version="",
+        model="",
+        weights_sha256="",
+        weights_source="",
+        quant="",
+        hard=(),
+        criteria={},
+        chosen=False,
+        note="",
+    )
+    return BakeoffRow(
+        kind="bakeoff",
+        row_id=new_id(),
+        at="2026-11-28T14:00:00.000000Z",
+        experiment="",
+        config_ids=(),
+        code_revision="unknown",
+        body=dataclasses.replace(empty, **body),
+    )
+
+
+def bakeoff_rule(
+    rule_hash: str = BAKEOFF_RULE,
+    replaces: str = "",
+    why: str = "",
+    capture: str = CAPTURE_SET,
+) -> BakeoffRow:
+    return _bakeoff(
+        "rule",
+        {
+            "rule": {"tie_points": 3},
+            "rule_hash": rule_hash,
+            "replaces": replaces,
+            "why": why,
+            "capture_set_hash": capture,
+            "capture_counts": {"chat": 12, "trials": 188, "passed_over": 4},
+        },
+    )
+
+
+def _candidate_fields(server: str, model: str) -> dict[str, Any]:
+    return {
+        "server": server,
+        "server_version": "made-up-1",
+        "model": model,
+        "weights_sha256": WEIGHTS,
+        "weights_source": "made-up/weights",
+        "quant": "Q4_K_M",
+    }
+
+
+def bakeoff_candidate(
+    server: str = "llama.cpp",
+    model: str = "made-up-27b",
+    rule_hash: str = BAKEOFF_RULE,
+    capture: str = CAPTURE_SET,
+) -> BakeoffRow:
+    return _bakeoff(
+        "candidate",
+        {
+            **_candidate_fields(server, model),
+            "rule_hash": rule_hash,
+            "capture_set_hash": capture,
+            "hard": (Verdict("pinned", True, "One version, every hash."),),
+            "criteria": {"usable_replies": {"usable": 190, "total": 200}},
+        },
+    )
+
+
+def bakeoff_soak(
+    passed: bool = True,
+    server: str = "llama.cpp",
+    model: str = "made-up-27b",
+    rule_hash: str = BAKEOFF_RULE,
+    capture: str = CAPTURE_SET,
+) -> BakeoffRow:
+    return _bakeoff(
+        "soak",
+        {
+            **_candidate_fields(server, model),
+            "rule_hash": rule_hash,
+            "capture_set_hash": capture,
+            "criteria": {"stays_up": {"passed": passed, "requests": 1440}},
+        },
+    )
+
+
+def bakeoff_choice(
+    server: str = "llama.cpp", model: str = "made-up-27b", rule_hash: str = BAKEOFF_RULE
+) -> BakeoffRow:
+    """A choice of the winner, or of none when the server is empty."""
+    fields = _candidate_fields(server, model) if server else {}
+    return _bakeoff(
+        "choice",
+        {**fields, "rule_hash": rule_hash, "chosen": bool(server), "why": "Step 5."},
     )
 
 

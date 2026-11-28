@@ -33,6 +33,7 @@ from lamplighter.ports import (
     row_text,
 )
 from tests.bench_kit import HARBOR_VERSION, RULE, USER, Bench, git
+from tests.ledger_kit import bakeoff_candidate, bakeoff_rule
 from tests.test_bench_trial import quick_settings
 
 NAME = "made-up"
@@ -230,6 +231,17 @@ def test_the_ledger_prints_one_line_per_row(bench: Bench) -> None:
         "decision",
     ]
     assert lines[2].endswith("6 passed, 0 failed, 0 infra, of 6 trials")
+
+
+def test_a_bake_off_row_is_printed_with_its_stage_and_candidate(bench: Bench) -> None:
+    for row in (bakeoff_rule(), bakeoff_candidate()):
+        assert asyncio.run(bench.ledger.append(row)) is None
+    assert asyncio.run(show_ledger(bench.parts(), None)) == 0
+    lines = bench.out.getvalue().splitlines()
+    assert [line.split("  ", 4)[4] for line in lines] == [
+        "bake-off rule",
+        "bake-off candidate llama.cpp made-up-27b",
+    ]
 
 
 def test_one_experiments_rows_are_printed_in_full_with_the_noise_floor(

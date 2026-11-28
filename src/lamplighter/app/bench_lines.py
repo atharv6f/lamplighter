@@ -4,6 +4,7 @@ from collections.abc import Sequence
 
 from lamplighter.bench import GateDecision, RunSet, SideSummary
 from lamplighter.ports import (
+    BakeoffRow,
     CorrectionRow,
     DecisionRow,
     LedgerRow,
@@ -101,6 +102,9 @@ def ledger_line(row: LedgerRow) -> str:
             what = f"{decision.outcome}, because {decision.why}"
         case CorrectionRow():
             what = f"corrects {row.body.corrects}: {row.body.note}"
+        case BakeoffRow():
+            step = row.body
+            what = f"bake-off {step.stage} {step.server} {step.model}".rstrip()
     return f"{head}  {what}"
 
 

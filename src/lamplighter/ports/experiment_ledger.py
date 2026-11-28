@@ -11,6 +11,7 @@ type SplitName = Literal["dev", "held_out"]
 type Side = Literal["baseline", "candidate"]
 # A loose run set has no side.
 type RunSetSide = Literal["baseline", "candidate", ""]
+type BakeoffStage = Literal["rule", "candidate", "soak", "choice"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,6 +90,50 @@ class CorrectionBody:
 
 
 @dataclass(frozen=True, slots=True)
+class Verdict:
+    """One requirement by name, whether it passed, and its evidence in a line."""
+
+    name: str
+    passed: bool
+    evidence: str
+
+
+@dataclass(frozen=True, slots=True)
+class BakeoffBody:
+    """One step of the bake-off of local model servers.
+
+    A `rule` row holds the rule's values in `rule` and their hash in
+    `rule_hash`, and, when it is not the first, the hash of the rule row
+    it `replaces` and `why`. Every other row holds in `rule_hash` the
+    hash of the rule row it was measured under, and leaves `rule` empty.
+
+    A `candidate` row holds the hard requirements in `hard` and the
+    measures in `criteria`. A `soak` row holds `stays_up` in `criteria`,
+    as an object with at least `passed`, true or false. A `choice` row is
+    `chosen` with the winner's server, model and weights, or not chosen
+    with those empty, and says `why`.
+    """
+
+    stage: BakeoffStage
+    rule: JsonObject
+    rule_hash: str
+    replaces: str
+    why: str
+    capture_set_hash: str
+    capture_counts: JsonObject
+    server: str
+    server_version: str
+    model: str
+    weights_sha256: str
+    weights_source: str
+    quant: str
+    hard: tuple[Verdict, ...]
+    criteria: JsonObject
+    chosen: bool
+    note: str
+
+
+@dataclass(frozen=True, slots=True)
 class PlanRow:
     """An experiment's plan. `config_ids` are the baseline's and the candidate's."""
 
@@ -161,7 +206,23 @@ class CorrectionRow:
     v: int = 1
 
 
-type LedgerRow = PlanRow | StartRow | RunSetRow | DecisionRow | CorrectionRow
+@dataclass(frozen=True, slots=True)
+class BakeoffRow:
+    """A step of the bake-off. It belongs to no experiment and names no config id."""
+
+    kind: Literal["bakeoff"]
+    row_id: str
+    at: str
+    experiment: str
+    config_ids: tuple[str, ...]
+    code_revision: str
+    body: BakeoffBody
+    v: int = 1
+
+
+type LedgerRow = (
+    PlanRow | StartRow | RunSetRow | DecisionRow | CorrectionRow | BakeoffRow
+)
 
 
 class ExperimentLedger(Protocol):
@@ -174,6 +235,12 @@ class ExperimentLedger(Protocol):
     are answered as if one had gone first. `rows` gives every row that
     `append` answered for, in the order they were added, and also a row
     whose `append` was killed after it was written whole.
+
+    For the bake-off, `refused_row` refuses a second `rule` row that does
+    not name the latest one as the one it `replaces` and say `why`; a
+    `candidate` or `soak` row whose rule hash or capture set hash is not
+    the latest rule row's; and a chosen `choice` row whose winner has no
+    passing `soak` row under the same rule.
     """
 
     async def append(self, row: LedgerRow) -> Failure | None:

@@ -1,5 +1,28 @@
 """The bench's own rules, as pure functions on plain values."""
 
+from lamplighter.bench.bakeoff_measures import (
+    HARD,
+    AdapterPerRequest,
+    CandidateMeasures,
+    FirstToken,
+    PeakMemory,
+    ReplyReason,
+    SoakCounts,
+    SoakMeasures,
+    Speeds,
+    UsableReplies,
+)
+from lamplighter.bench.bakeoff_rule import (
+    BakeoffChoice,
+    BakeoffRule,
+    Candidate,
+    Left,
+    bakeoff_choice,
+    bakeoff_rule_hash,
+    candidate_of,
+    read_bakeoff_rule,
+    stays_up,
+)
 from lamplighter.bench.gate import (
     COST_GUARD,
     MOST_TASKS,
@@ -45,6 +68,25 @@ from lamplighter.bench.trial_record import (
 )
 
 __all__ = [
+    "HARD",
+    "AdapterPerRequest",
+    "BakeoffChoice",
+    "BakeoffRule",
+    "Candidate",
+    "CandidateMeasures",
+    "FirstToken",
+    "Left",
+    "PeakMemory",
+    "ReplyReason",
+    "SoakCounts",
+    "SoakMeasures",
+    "Speeds",
+    "UsableReplies",
+    "bakeoff_choice",
+    "bakeoff_rule_hash",
+    "candidate_of",
+    "read_bakeoff_rule",
+    "stays_up",
     "DEV_PLACES",
     "GROUPS",
     "PINNED_IMAGE",

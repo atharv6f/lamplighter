@@ -60,6 +60,9 @@ from lamplighter.ports.executor import (
     refused_command,
 )
 from lamplighter.ports.experiment_ledger import (
+    BakeoffBody,
+    BakeoffRow,
+    BakeoffStage,
     CorrectionBody,
     CorrectionRow,
     DecisionBody,
@@ -76,6 +79,7 @@ from lamplighter.ports.experiment_ledger import (
     SplitName,
     StartBody,
     StartRow,
+    Verdict,
 )
 from lamplighter.ports.failure import Failure, FailureEffect, FailureKind
 from lamplighter.ports.health import HealthCheck
@@ -151,6 +155,9 @@ __all__ = [
     "HarnessAgentSpec",
     "Job",
     "RunnerAgentSpec",
+    "BakeoffBody",
+    "BakeoffRow",
+    "BakeoffStage",
     "CorrectionBody",
     "CorrectionRow",
     "DecisionBody",
@@ -254,6 +261,7 @@ __all__ = [
     "Upcasters",
     "Usage",
     "UsageEvent",
+    "Verdict",
     "as_saved",
     "blob_damage",
     "canonical_json",

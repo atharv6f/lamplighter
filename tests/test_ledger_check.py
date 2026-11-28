@@ -1,9 +1,27 @@
 """The book's rules are tried in order, and the count of held-out uses is its own."""
 
 import dataclasses
+from typing import Any
 
-from lamplighter.ports import Failure, LedgerRow, held_out_uses, refused_row
-from tests.ledger_kit import decision, loose, plan, start, whole_experiment
+import pytest
+
+from lamplighter.ports import (
+    Failure,
+    JsonObject,
+    LedgerRow,
+    held_out_uses,
+    refused_row,
+)
+from tests.ledger_kit import (
+    bakeoff_choice,
+    bakeoff_rule,
+    bakeoff_soak,
+    decision,
+    loose,
+    plan,
+    start,
+    whole_experiment,
+)
 
 
 def _answer(rows: list[LedgerRow], row: LedgerRow) -> tuple[str, str] | None:
@@ -70,3 +88,39 @@ def test_a_plan_on_the_held_out_set_is_no_use_until_a_side_starts() -> None:
 
 def test_an_experiment_with_both_sides_started_is_one_use() -> None:
     assert held_out_uses(whole_experiment("same", "held_out")) == 1
+
+
+def _soak_with(criteria: JsonObject) -> LedgerRow:
+    row = bakeoff_soak()
+    return dataclasses.replace(
+        row, body=dataclasses.replace(row.body, criteria=criteria)
+    )
+
+
+def _choice_with(**fields: Any) -> LedgerRow:
+    row = bakeoff_choice()
+    body = dataclasses.replace(row.body, **fields)
+    return dataclasses.replace(row, body=body)
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [
+        _soak_with({}),
+        _soak_with({"stays_up": {"passed": "yes"}}),
+        _soak_with({"stays_up": True}),
+        _choice_with(chosen=False),
+        _choice_with(weights_sha256=""),
+        _choice_with(server=""),
+    ],
+)
+def test_a_soak_or_choice_row_out_of_shape_is_refused_by_its_shape(
+    broken: LedgerRow,
+) -> None:
+    # Each would be let in after these rows if its shape were right.
+    rows: list[LedgerRow] = [bakeoff_rule(), bakeoff_soak()]
+    assert refused_row(rows, bakeoff_soak()) is None
+    assert refused_row(rows, bakeoff_choice()) is None
+    answer = _answer(rows, broken)
+    assert answer is not None
+    assert "not one of the book's" in answer[1]

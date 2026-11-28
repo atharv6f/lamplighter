@@ -43,6 +43,7 @@ from lamplighter.core.session_privacy import session_is_private
 from lamplighter.core.trace_projector import PassDone, TraceProjector
 from lamplighter.core.transcript import rebuild_messages
 from lamplighter.core.upcasters import UPCASTERS
+from lamplighter.core.usable_reply import ReplyReason, ReplyVerdict, judge_reply
 
 __all__ = [
     "CANCELLED",
@@ -97,4 +98,7 @@ __all__ = [
     "take",
     "unfinished_work",
     "unsupported",
+    "ReplyReason",
+    "ReplyVerdict",
+    "judge_reply",
 ]
