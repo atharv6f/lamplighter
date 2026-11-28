@@ -36,7 +36,7 @@ from lamplighter.adapters.builtin_tools import (
 )
 from lamplighter.adapters.container import AsRoot, ContainerExecutor
 from lamplighter.adapters.harbor_jobs import HarborJobs, HarborPaths
-from lamplighter.adapters.in_memory import InMemoryBlobStore
+from lamplighter.adapters.in_memory import InMemoryBlobStore, InMemoryEventLog
 from lamplighter.adapters.openai_chat import OpenAIChatModel, port_owner
 from lamplighter.adapters.phoenix import PhoenixSink
 from lamplighter.adapters.seatbelt import SeatbeltExecutor
@@ -51,6 +51,9 @@ from lamplighter.adapters.sqlite import (
     open_database,
     store_sizes,
 )
+from lamplighter.app.bakeoff import BakeoffParts
+from lamplighter.app.bakeoff_command import add_bakeoff_parts, bakeoff_command
+from lamplighter.app.bakeoff_measure import MeasureParts
 from lamplighter.app.bench_commands import add_bench_parts, bench_command
 from lamplighter.app.bench_parts import BenchParts
 from lamplighter.app.bench_settings import (
@@ -64,9 +67,19 @@ from lamplighter.app.bench_trial import (
     TrialStore,
     run_trial,
 )
-from lamplighter.app.chat import OFF_THIS_MAC, ChatParts, Stores, Tooling, chat
+from lamplighter.app.capture_set import Rebuild
+from lamplighter.app.chat import (
+    OFF_THIS_MAC,
+    ChatParts,
+    Stores,
+    Tooling,
+    chat,
+    run_spec,
+)
 from lamplighter.app.code_revision import REPO_ROOT, code_revision
 from lamplighter.app.config import Config, load_config
+from lamplighter.app.keep_awake import keep_awake
+from lamplighter.app.memory_watch import pressure_level, server_footprint
 from lamplighter.app.model_set import ModelSet
 from lamplighter.app.models_command import entry_field, list_models
 from lamplighter.app.report import day_lines
@@ -78,6 +91,7 @@ from lamplighter.ports import (
     BlobStore,
     Clock,
     Command,
+    EventLog,
     Executor,
     Failure,
     ModelClient,
@@ -244,6 +258,9 @@ def _add_models_parts(models: argparse.ArgumentParser) -> None:
     field.add_argument("--settings", type=Path, help="settings file")
     field.add_argument("name")
     field.add_argument("field")
+    add_bakeoff_parts(
+        actions.add_parser("bakeoff", help="choose the model to run on this Mac")
+    )
 
 
 def _day(text: str) -> str:
@@ -434,6 +451,8 @@ def trial_parts(api_key: str, revision: str) -> TrialParts:
 
 
 def _models(args: argparse.Namespace) -> int:
+    if args.action == "bakeoff":
+        return _bakeoff(args)
     if args.action == "weights-hash":
         return _printed(weights_hash(args.path))
     if args.action == "field":
@@ -451,6 +470,76 @@ def _models(args: argparse.Namespace) -> int:
 
     asyncio.run(listed())
     return 0
+
+
+def _bakeoff(args: argparse.Namespace) -> int:
+    settings = load_bench_settings(BENCH / "bench.toml", Path.home())
+    if isinstance(settings, Failure):
+        return _failed(settings)
+    version = harbor_version(BENCH / "harbor" / "uv.lock")
+    if isinstance(version, Failure):
+        return _failed(version)
+    return asyncio.run(bakeoff_command(measure_parts(settings, version), args))
+
+
+def measure_parts(settings: BenchSettings, version: str) -> MeasureParts:
+    """Build the bake-off on the bench, the stores, this Mac's servers and its kernel.
+
+    No model off this Mac is called, so the clients need no key. The
+    bake-off's own client reads no proxy setting, so it reaches only the
+    server on 127.0.0.1, and it waits up to ten minutes for a long prompt.
+    """
+    clock = SystemClock()
+
+    def open_log(config: Config) -> tuple[EventLog, Callable[[], None]] | Failure:
+        folder = Path(config.store.dir)
+        # With no store there is no chat to capture, and none is made.
+        if not (folder / "state.db").is_file():
+            empty = InMemoryEventLog(UPCASTERS, config.store.max_record_bytes)
+            return empty, lambda: None
+        stores = sqlite_stores(folder, config, clock)
+        return stores if isinstance(stores, Failure) else (stores.log, stores.close)
+
+    bakeoff = BakeoffParts(
+        bench=bench_parts(settings, version),
+        models=lambda config: build_models(config, "", clock),
+        chat_ids=lambda config: chat_config_ids(config, clock),
+        rebuild=rebuild_of,
+        open_log=open_log,
+    )
+    return MeasureParts(
+        bakeoff=bakeoff,
+        http=lambda: httpx.AsyncClient(trust_env=False, timeout=600.0),
+        footprint=server_footprint,
+        pressure=pressure_level,
+        keep_awake=keep_awake,
+    )
+
+
+def chat_config_ids(config: Config, clock: Clock) -> frozenset[str]:
+    """Give the config ids a chat on these settings saves, private and not.
+
+    The tools are built as `chat` builds them, with blobs in memory, only
+    to be listed and hashed.
+    """
+    found: set[str] = set()
+    for web, private in ((system_web(), False), (closed_web(), True)):
+        blobs = InMemoryBlobStore(config.store.max_blob_bytes)
+        tooling = builtin_tooling(config, clock, web)(blobs)
+        found.add(run_spec(config, tooling, "", private).config_id)
+    return frozenset(found)
+
+
+def rebuild_of(config: Config) -> Rebuild:
+    """Give what a request takes from the settings beside its messages."""
+    run = config.run
+    return Rebuild(
+        system=run.system,
+        tools=tuple(entry.spec for entry in tool_entries(config)),
+        max_output=run.model_max_output,
+        deadline_ms=run.model_deadline_ms,
+        retries=run.model_retries,
+    )
 
 
 def _printed(answer: str | Failure) -> int:

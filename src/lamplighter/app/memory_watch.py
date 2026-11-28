@@ -12,7 +12,7 @@ import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from lamplighter.ports import Clock
+from lamplighter.ports import Clock, Failure
 
 # `rusage_info_v2` starts with a 16-byte uuid and then 64-bit counts, of
 # which `ri_phys_footprint` is the eighth. Room is left for the longer
@@ -21,6 +21,7 @@ _RUSAGE_INFO_V2 = 2
 _FOOTPRINT_OFFSET = 16 + 7 * 8
 _RUSAGE_BYTES = 512
 _PRESSURE = b"kern.memorystatus_vm_pressure_level"
+_FIND_SECONDS = 2.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,3 +130,16 @@ def pressure_level() -> int | None:
     if libc.sysctlbyname(_PRESSURE, ctypes.byref(level), ctypes.byref(size), None, 0):
         return None
     return level.value
+
+
+def server_footprint(port: int) -> Callable[[], int | None] | Failure:
+    """Give a reader of the footprint of the server listening on 127.0.0.1 at `port`."""
+    pid = listening_pid(port, _FIND_SECONDS)
+    if pid is None:
+        return Failure(
+            kind="unavailable",
+            effect="none",
+            message=f"Nothing listens on 127.0.0.1:{port}.",
+            source="memory_watch",
+        )
+    return phys_footprint(pid)

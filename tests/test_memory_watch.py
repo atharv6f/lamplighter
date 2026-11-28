@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import socket
 import sys
 
 import pytest
@@ -11,7 +12,9 @@ from lamplighter.app.memory_watch import (
     MemoryWatch,
     phys_footprint,
     pressure_level,
+    server_footprint,
 )
+from lamplighter.ports import Failure
 from tests.fake_clock import FakeClock
 
 GB = 1_000_000_000
@@ -92,3 +95,19 @@ def test_this_process_s_footprint_and_the_pressure_can_be_read() -> None:
     footprint = phys_footprint(os.getpid())()
     assert footprint is not None and footprint > 1_000_000
     assert pressure_level() in (1, 2, 4)
+
+
+@pytest.mark.mac
+def test_the_footprint_of_the_server_on_a_port_is_read() -> None:
+    assert sys.platform == "darwin"
+    with socket.socket() as listening:
+        listening.bind(("127.0.0.1", 0))
+        listening.listen()
+        port = listening.getsockname()[1]
+        reader = server_footprint(port)
+        assert not isinstance(reader, Failure), reader
+        footprint = reader()
+        assert footprint is not None and footprint > 1_000_000
+    nobody = server_footprint(port)
+    assert isinstance(nobody, Failure)
+    assert f"Nothing listens on 127.0.0.1:{port}." == nobody.message

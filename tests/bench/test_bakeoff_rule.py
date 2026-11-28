@@ -29,6 +29,7 @@ from lamplighter.bench import (
     stays_up,
 )
 from lamplighter.ports import (
+    BakeoffRow,
     Failure,
     JsonObject,
     JsonValue,
@@ -37,6 +38,7 @@ from lamplighter.ports import (
     to_plain,
 )
 from tests.ledger_kit import (
+    CAPTURE_SET,
     bakeoff_candidate,
     bakeoff_rule,
     bakeoff_soak,
@@ -374,6 +376,7 @@ def test_only_the_latest_rule_s_rows_count() -> None:
     ]
     choice = _chose(rows)
     assert choice.rule_hash == bakeoff_rule_hash(lower)
+    assert choice.capture_set_hash == CAPTURE_SET
     assert _servers(choice.order) == ["new"]
     assert _servers(tuple(left.candidate for left in choice.out)) == ["too-big"]
 
@@ -395,3 +398,27 @@ def test_a_candidate_measured_on_no_request_is_out() -> None:
     assert [left.why for left in choice.out] == [
         "step 2: it was measured on no request"
     ]
+
+
+def test_only_the_rows_on_the_latest_rule_row_s_capture_set_count() -> None:
+    # The same rule, written again to take a new capture set.
+    new_set = "3" * 64
+
+    def on_new_set(row: LedgerRow) -> LedgerRow:
+        assert isinstance(row, BakeoffRow)
+        body = dataclasses.replace(row.body, capture_set_hash=new_set)
+        return dataclasses.replace(row, body=body)
+
+    rows = [
+        _rule_row(),
+        _measured("old"),
+        _soak("old", True),
+        on_new_set(_rule_row()),
+        on_new_set(_measured("new")),
+    ]
+    choice = _chose(rows)
+    assert (choice.rule_hash, choice.capture_set_hash) == (RULE_HASH, new_set)
+    assert _servers(choice.order) == ["new"]
+    assert choice.to_soak == Candidate(
+        "new", "made-up-27b", choice.order[0].weights_sha256
+    )

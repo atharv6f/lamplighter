@@ -223,6 +223,7 @@ def test_a_decision_with_no_rule_hash_is_refused(book: ExperimentLedger) -> None
 
 
 NEW_RULE = "2" * 64
+NEW_CAPTURE = "3" * 64
 
 
 def test_a_whole_bake_off_comes_back_as_it_was_added(book: ExperimentLedger) -> None:
@@ -298,4 +299,17 @@ def test_a_soak_under_an_earlier_rule_does_not_choose_under_a_new_one(
     added(book, bakeoff_rule(), bakeoff_soak())
     added(book, bakeoff_rule(NEW_RULE, BAKEOFF_RULE, "Made up."))
     refused(book, bakeoff_choice(rule_hash=NEW_RULE), "invalid_input")
-    added(book, bakeoff_choice())
+    # A choice under the earlier rule is not under the latest one.
+    refused(book, bakeoff_choice(), "invalid_input")
+    added(book, bakeoff_choice("", rule_hash=NEW_RULE))
+
+
+def test_a_soak_on_an_earlier_capture_set_does_not_choose_on_a_new_one(
+    book: ExperimentLedger,
+) -> None:
+    # The same rule, replaced only to take a new capture set.
+    added(book, bakeoff_rule(), bakeoff_soak())
+    added(book, bakeoff_rule(BAKEOFF_RULE, BAKEOFF_RULE, "Made up.", NEW_CAPTURE))
+    refused(book, bakeoff_choice(capture=NEW_CAPTURE), "invalid_input")
+    added(book, bakeoff_soak(capture=NEW_CAPTURE))
+    added(book, bakeoff_choice(capture=NEW_CAPTURE))

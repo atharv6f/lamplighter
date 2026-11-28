@@ -270,13 +270,22 @@ def bakeoff_soak(
 
 
 def bakeoff_choice(
-    server: str = "llama.cpp", model: str = "made-up-27b", rule_hash: str = BAKEOFF_RULE
+    server: str = "llama.cpp",
+    model: str = "made-up-27b",
+    rule_hash: str = BAKEOFF_RULE,
+    capture: str = CAPTURE_SET,
 ) -> BakeoffRow:
     """A choice of the winner, or of none when the server is empty."""
     fields = _candidate_fields(server, model) if server else {}
     return _bakeoff(
         "choice",
-        {**fields, "rule_hash": rule_hash, "chosen": bool(server), "why": "Step 5."},
+        {
+            **fields,
+            "rule_hash": rule_hash,
+            "capture_set_hash": capture,
+            "chosen": bool(server),
+            "why": "Step 5.",
+        },
     )
 
 

@@ -255,12 +255,12 @@ def _bakeoff_disagrees(rows: Sequence[LedgerRow], body: BakeoffBody) -> str | No
     latest = rules[-1] if rules else None
     if body.stage == "rule":
         return _rule_disagrees(latest, body)
-    if body.stage in ("candidate", "soak"):
-        under = latest is not None and (body.rule_hash, body.capture_set_hash) == (
-            latest.rule_hash,
-            latest.capture_set_hash,
-        )
-        return None if under else f"The {body.stage} row is not under the latest rule."
+    under = latest is not None and (body.rule_hash, body.capture_set_hash) == (
+        latest.rule_hash,
+        latest.capture_set_hash,
+    )
+    if not under:
+        return f"The {body.stage} row is not under the latest rule."
     if body.chosen and not any(_passing_soak(r, body) for r in rows):
         return f"The winner {body.server} {body.model} has no passing soak row."
     return None
@@ -281,8 +281,15 @@ def _passing_soak(row: LedgerRow, choice: BakeoffBody) -> bool:
     if not isinstance(row, BakeoffRow) or row.body.stage != "soak":
         return False
     soak = row.body
-    same = (soak.rule_hash, soak.server, soak.model, soak.weights_sha256) == (
+    same = (
+        soak.rule_hash,
+        soak.capture_set_hash,
+        soak.server,
+        soak.model,
+        soak.weights_sha256,
+    ) == (
         choice.rule_hash,
+        choice.capture_set_hash,
         choice.server,
         choice.model,
         choice.weights_sha256,

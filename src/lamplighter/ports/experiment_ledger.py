@@ -104,8 +104,10 @@ class BakeoffBody:
 
     A `rule` row holds the rule's values in `rule` and their hash in
     `rule_hash`, and, when it is not the first, the hash of the rule row
-    it `replaces` and `why`. Every other row holds in `rule_hash` the
-    hash of the rule row it was measured under, and leaves `rule` empty.
+    it `replaces` and `why`. Every other row holds the `rule_hash` and the
+    `capture_set_hash` of the rule row it was measured under, and leaves
+    `rule` empty. Both are needed, because a rule row that only takes a
+    new capture set has the same rule hash as the one it replaces.
 
     A `candidate` row holds the hard requirements in `hard` and the
     measures in `criteria`. A `soak` row holds `stays_up` in `criteria`,
@@ -237,10 +239,10 @@ class ExperimentLedger(Protocol):
     whose `append` was killed after it was written whole.
 
     For the bake-off, `refused_row` refuses a second `rule` row that does
-    not name the latest one as the one it `replaces` and say `why`; a
-    `candidate` or `soak` row whose rule hash or capture set hash is not
-    the latest rule row's; and a chosen `choice` row whose winner has no
-    passing `soak` row under the same rule.
+    not name the latest one as the one it `replaces` and say `why`; any
+    other bake-off row whose rule hash or capture set hash is not the
+    latest rule row's; and a chosen `choice` row whose winner has no
+    passing `soak` row under the same rule row.
     """
 
     async def append(self, row: LedgerRow) -> Failure | None:

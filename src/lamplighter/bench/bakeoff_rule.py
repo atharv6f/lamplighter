@@ -56,6 +56,8 @@ class Left:
 class BakeoffChoice:
     """What the rule makes of the rows under the latest rule row.
 
+    `rule_hash` and `capture_set_hash` are that row's, which every row
+    under it repeats.
     `order` holds every candidate still in after step 2, in the rule's
     order. `to_soak` is the next to soak when the choice waits on a soak.
     Otherwise `chosen` is the winner, or None when no candidate is left
@@ -63,6 +65,7 @@ class BakeoffChoice:
     """
 
     rule_hash: str
+    capture_set_hash: str
     order: tuple[Candidate, ...]
     out: tuple[Left, ...]
     to_soak: Candidate | None
@@ -127,7 +130,7 @@ def bakeoff_choice(rows: Sequence[LedgerRow]) -> BakeoffChoice | Failure:
     rule = read_bakeoff_rule(latest.rule)
     if isinstance(rule, Failure):
         return rule
-    under = [s for s in steps if s.rule_hash == latest.rule_hash]
+    under = [s for s in steps if _under(s, latest)]
     measured: list[tuple[Candidate, CandidateMeasures]] = []
     out: list[Left] = []
     for candidate, body in _latest_of_each(under, "candidate").items():
@@ -137,7 +140,7 @@ def bakeoff_choice(rows: Sequence[LedgerRow]) -> BakeoffChoice | Failure:
         else:
             measured.append((candidate, kept))
     order = _ordered(rule, measured)
-    return _soaked(latest.rule_hash, order, tuple(out), _latest_of_each(under, "soak"))
+    return _soaked(latest, order, tuple(out), _latest_of_each(under, "soak"))
 
 
 def candidate_of(body: BakeoffBody) -> Candidate:
@@ -206,18 +209,28 @@ def _last(pair: tuple[Candidate, CandidateMeasures]) -> tuple[int, str, str]:
     return peak, candidate.server, candidate.model
 
 
+def _under(step: BakeoffBody, rule: BakeoffBody) -> bool:
+    # A rule row replaced only to take a new capture set has the same rule
+    # hash, so a row is under it only when both hashes are its.
+    return (step.rule_hash, step.capture_set_hash) == (
+        rule.rule_hash,
+        rule.capture_set_hash,
+    )
+
+
 def _soaked(
-    rule_hash: str,
+    rule: BakeoffBody,
     order: tuple[Candidate, ...],
     out: tuple[Left, ...],
     soaks: dict[Candidate, BakeoffBody],
 ) -> BakeoffChoice:
+    hashes = (rule.rule_hash, rule.capture_set_hash)
     failed: list[str] = []
     for place, candidate in enumerate(order, start=1):
         soak = soaks.get(candidate)
         if soak is None:
             why = f"step 5: {_name(candidate)} is next to soak"
-            return BakeoffChoice(rule_hash, order, out, candidate, None, why)
+            return BakeoffChoice(*hashes, order, out, candidate, None, why)
         if from_stored(_SoakPassed, soak.criteria["stays_up"]).passed:
             why = (
                 f"steps 3 and 4: it is number {place} in the order; step 5: its soak"
@@ -225,14 +238,14 @@ def _soaked(
             )
             if failed:
                 why += f", after {', '.join(failed)} failed theirs"
-            return BakeoffChoice(rule_hash, order, out, None, candidate, why)
+            return BakeoffChoice(*hashes, order, out, None, candidate, why)
         failed.append(_name(candidate))
     why = (
         "step 5: no candidate passed its soak"
         if order
         else "step 2: no candidate is left"
     )
-    return BakeoffChoice(rule_hash, order, out, None, None, why)
+    return BakeoffChoice(*hashes, order, out, None, None, why)
 
 
 def _name(candidate: Candidate) -> str:
