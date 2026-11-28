@@ -6,6 +6,7 @@ holds no link. Those are for the task's author and for the run of the
 reference solution and of doing nothing.
 """
 
+import posixpath
 import re
 import tomllib
 from collections.abc import Iterable, Mapping
@@ -30,6 +31,8 @@ _INSTALLER = re.compile(r"\b(?:pip|apt-get|apt|curl|wget|uv)\b")
 _HOST = re.compile(rb"https?://([^/\s:'\"<>()\[\]]+)")
 # A path under the check's own folder, but not one under /app/tests.
 _CHECK_COPY = re.compile(r"(?<![\w.-])/tests/([\w./-]+)")
+# A folder made open to every user, for a file from outside/ to go in.
+_MADE_OPEN = re.compile(r"mkdir -p -m 755 (/[\w./-]+)")
 
 
 def task_faults(name: str, files: Iterable[TaskFile]) -> tuple[str, ...]:
@@ -104,26 +107,33 @@ def _dockerfile_faults(text: str, by_path: Mapping[str, TaskFile]) -> list[str]:
         return ["The Dockerfile does not start FROM the pinned image, by digest."]
     faults: list[str] = []
     installed: set[str] = set()
+    made: set[str] = set()
     for line in lines[1:]:
         word, _, rest = line.partition(" ")
+        opened = _MADE_OPEN.fullmatch(rest) if word == "RUN" else None
         if line == "WORKDIR /app":
             continue
-        if word == "COPY":
-            wrong = _copy_faults(rest.split())
+        if opened is not None:
+            made.add(opened.group(1))
+        elif word == "COPY":
+            wrong = _copy_faults(rest.split(), made)
             faults.extend(wrong)
             if not wrong:
                 installed |= _installed(rest.split(), by_path)
         elif word != "RUN" or rest not in installed:
-            # A RUN may only run, by its path, one file a COPY put there.
+            # A RUN may only run, by its path, one file a COPY put there, or
+            # make a folder open to every user.
             faults.append(f"The Dockerfile has a line it may not have: {line}")
     return faults
 
 
-def _copy_faults(words: list[str]) -> list[str]:
+def _copy_faults(words: list[str], made: set[str]) -> list[str]:
     flags = [w for w in words if w.startswith("--")]
     places = [w for w in words if not w.startswith("--")]
     if len(places) < 2 or any(flag != "--chmod=644" for flag in flags):
         return [f"The Dockerfile has a COPY it may not have: {' '.join(words)}"]
+    # The folder of /opt/vendor/LICENSE, and of /opt/vendor/ too.
+    folder = posixpath.dirname(places[-1])
     faults: list[str] = []
     for source in places[:-1]:
         if not source.startswith(("files/", "outside/")):
@@ -132,6 +142,12 @@ def _copy_faults(words: list[str]) -> list[str]:
             )
         if source.startswith("outside/") and "--chmod=644" not in flags:
             faults.append(f"A COPY of {source} needs --chmod=644.")
+        elif source.startswith("outside/") and folder not in made:
+            # A folder that COPY makes takes --chmod's mode too, with no
+            # search bit, and only root could then reach the file.
+            faults.append(
+                f"A COPY of {source} needs RUN mkdir -p -m 755 {folder} before it."
+            )
     return faults
 
 
