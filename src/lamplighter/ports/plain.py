@@ -91,11 +91,37 @@ def _read_union(hint: Any, data: Any, record: _RecordReader) -> Any:
         return None
     if len(members) == 1:
         return _read(members[0], data, record)
+    words = _words(members)
+    if words is not None:
+        if data not in words:
+            raise ValueError(f"{data!r} is not one of {words}")
+        return data
     kind = _expect(dict, data).get("kind")
     for member in members:
         if get_args(get_type_hints(member)["kind"]) == (kind,):
             return record(member, data)
     raise ValueError(f"no record has kind {kind!r}")
+
+
+def _words(members: list[Any]) -> tuple[Any, ...] | None:
+    # A union whose every member is a set of words, maybe through an alias
+    # or another union, is one set of words. Any other member makes it a
+    # union of records.
+    words: list[Any] = []
+    for member in members:
+        while isinstance(member, TypeAliasType):
+            member = member.__value__
+        origin = get_origin(member)
+        if origin is Literal:
+            words.extend(get_args(member))
+        elif origin in (Union, types.UnionType):
+            inner = _words(list(get_args(member)))
+            if inner is None:
+                return None
+            words.extend(inner)
+        else:
+            return None
+    return tuple(words)
 
 
 def _exact_record(record_type: Any, data: Any) -> Any:

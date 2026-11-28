@@ -2,9 +2,9 @@
 
 import hashlib
 import os
-import subprocess
 from pathlib import Path
 
+from lamplighter.app.git_output import git_output
 from lamplighter.ports import canonical_json
 
 UNKNOWN = "unknown"
@@ -12,7 +12,6 @@ UNKNOWN = "unknown"
 REPO_ROOT = Path(__file__).resolve().parents[3]
 # The paths whose changes are code. Others, such as the README, are not.
 _CODE_PATHS = ("src", "bench", "pyproject.toml", "uv.lock")
-_GIT_SECONDS = 10
 _MARK_CHARS = 12
 
 
@@ -81,26 +80,10 @@ def _changed_paths(status: str) -> list[str]:
 
 
 def _git(root: Path, *args: str) -> str | None:
-    # Nothing of the caller's that points git elsewhere, such as GIT_DIR, is
-    # passed on, so the answer is about the checkout at `root`.
-    env = {
-        key: value for key, value in os.environ.items() if not key.startswith("GIT_")
-    }
-    env["GIT_OPTIONAL_LOCKS"] = "0"
-    try:
-        done = subprocess.run(
-            ["git", *args],
-            cwd=root,
-            env=env,
-            capture_output=True,
-            timeout=_GIT_SECONDS,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if done.returncode != 0:
+    found = git_output(root, *args)
+    if found is None:
         return None
     try:
-        return done.stdout.decode("utf-8")
+        return found.decode("utf-8")
     except UnicodeDecodeError:
         return None

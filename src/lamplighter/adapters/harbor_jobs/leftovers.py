@@ -64,9 +64,13 @@ def remove_leftovers(trials: list[str]) -> Failure | None:
 
 
 def docker_answers() -> Failure | None:
-    """Say whether Docker's daemon answers."""
+    """Say whether Docker's daemon answers, with the line the bench prints if not."""
     found = _docker(["version", "--format", "{{.Server.Version}}"])
-    return found if isinstance(found, Failure) else None
+    if not isinstance(found, Failure):
+        return None
+    return Failure(
+        "unavailable", "none", f"Docker is not running. {found.message}", _SOURCE
+    )
 
 
 def _docker(words: list[str]) -> str | Failure:

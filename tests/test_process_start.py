@@ -18,7 +18,7 @@ STARTS = {"subprocess", "multiprocessing", "pty"}
 # Each start there must name its program as a word in the code itself, so
 # no command the model wrote can reach it.
 FIXED_PROGRAMS = {
-    "app/code_revision.py": {"git"},
+    "app/git_output.py": {"git"},
     "adapters/harbor_jobs/leftovers.py": {"docker"},
     "adapters/harbor_jobs/runner.py": {"/bin/sh"},
 }

@@ -19,6 +19,7 @@ import httpx
 from lamplighter.adapters import (
     FakeExecutor,
     FileBlobStore,
+    FileLedger,
     FileTraceCursor,
     SystemClock,
     SystemIds,
@@ -32,6 +33,7 @@ from lamplighter.adapters.builtin_tools import (
     system_web,
 )
 from lamplighter.adapters.container import AsRoot, ContainerExecutor
+from lamplighter.adapters.harbor_jobs import HarborJobs, HarborPaths
 from lamplighter.adapters.in_memory import InMemoryBlobStore
 from lamplighter.adapters.phoenix import PhoenixSink, local_address
 from lamplighter.adapters.seatbelt import SeatbeltExecutor
@@ -46,6 +48,13 @@ from lamplighter.adapters.sqlite import (
     open_database,
     store_sizes,
 )
+from lamplighter.app.bench_commands import add_bench_parts, bench_command
+from lamplighter.app.bench_parts import BenchParts
+from lamplighter.app.bench_settings import (
+    BenchSettings,
+    harbor_version,
+    load_bench_settings,
+)
 from lamplighter.app.bench_trial import (
     TrialModel,
     TrialParts,
@@ -59,7 +68,7 @@ from lamplighter.app.config import Config, load_config
 from lamplighter.app.report import day_lines
 from lamplighter.app.traces import export_spans, reset_cursor
 from lamplighter.bench import TrialRecord
-from lamplighter.core import SPAN_LAYOUT
+from lamplighter.core import SPAN_LAYOUT, portable_config_id
 from lamplighter.ports import (
     BlobStore,
     Clock,
@@ -75,6 +84,7 @@ from lamplighter.ports import (
 )
 
 NO_KEY = "ANTHROPIC_API_KEY is not set."
+BENCH = REPO_ROOT / "bench"
 # How long a write waits for another process that holds the store's lock.
 STORE_TIMEOUT_S = 5.0
 _DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
@@ -115,6 +125,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command is None:
         print("lamplighter: nothing to run yet")
         return 0
+    if args.command == "bench":
+        # The settings file is the bench's to load: a plan refuses one that
+        # does not load, with its own line.
+        return _bench(args)
     config = load_config(args.config)
     if args.command == "chat":
         return _chat(config, args.session)
@@ -166,6 +180,7 @@ def _parser() -> argparse.ArgumentParser:
     steps.add_parser("reset", help="send every span again at the next export")
     report = commands.add_parser("report", help="report one day from the log")
     report.add_argument("--day", type=_day, help="the day in UTC, as YYYY-MM-DD")
+    add_bench_parts(commands.add_parser("bench", help="run the bench and the gate"))
     return parser
 
 
@@ -345,6 +360,67 @@ def trial_parts(api_key: str, revision: str) -> TrialParts:
         executor=executor,
         tools=tools,
         model=model,
+    )
+
+
+def _bench(args: argparse.Namespace) -> int:
+    settings = load_bench_settings(BENCH / "bench.toml", Path.home())
+    if isinstance(settings, Failure):
+        return _failed(settings)
+    version = harbor_version(BENCH / "harbor" / "uv.lock")
+    if isinstance(version, Failure):
+        return _failed(version)
+    return asyncio.run(bench_command(bench_parts(settings, version), args, args.config))
+
+
+def bench_parts(settings: BenchSettings, version: str) -> BenchParts:
+    """Build the bench command on Harbor, the ledger file, this checkout and terminal.
+
+    The bench folder is made here, so that the ledger and the job folders
+    have somewhere to go.
+    """
+    folder = Path(settings.dir)
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return BenchParts(
+        jobs=harbor_jobs(folder),
+        check_jobs=harbor_jobs(folder / "checks"),
+        ledger=FileLedger(folder / "ledger.jsonl"),
+        clock=SystemClock(),
+        ids=SystemIds(),
+        root=REPO_ROOT,
+        settings=settings,
+        harbor_version=version,
+        portable_id=settings_portable_id,
+        environ=os.environ,
+        user=(os.getuid(), os.getgid()),
+        out=sys.stdout,
+        errors=sys.stderr,
+    )
+
+
+def harbor_jobs(bench: Path) -> HarborJobs:
+    """Build the job runner on the pinned Harbor, with its job folders in `bench`."""
+    harbor = BENCH / "harbor"
+    return HarborJobs(
+        HarborPaths(
+            start_script=harbor / "start.sh",
+            bench=bench,
+            tasks=BENCH / "tasks",
+            compose=harbor / "no_network.yaml",
+            agent_class="harbor_shim.agent:HarnessAgent",
+            environment_class="harbor_shim.environment:SharedFolderDocker",
+        )
+    )
+
+
+def settings_portable_id(config: Config) -> str:
+    """Give the portable config id of a settings file, without a trial."""
+    return portable_config_id(
+        config.model,
+        config.prices,
+        config.run,
+        tool_entries(config),
+        dataclasses.asdict(config.tools),
     )
 
 

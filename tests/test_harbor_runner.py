@@ -98,8 +98,8 @@ def test_an_exit_code_that_is_not_0_is_unavailable_with_the_code(bench: Bench) -
     answer = bench.run()
     assert isinstance(answer, Failure)
     assert (answer.kind, answer.effect) == ("unavailable", "none")
-    assert "130" in answer.message
-    assert str(bench.own / "harbor.log") in answer.message
+    log = bench.own / "harbor.log"
+    assert answer.message == f"Harbor ended with exit code 130. See {log}."
     bench.stand.clear("exit_code")
     assert bench.run() is None
 
@@ -110,6 +110,7 @@ def test_docker_that_does_not_answer_is_unavailable_and_starts_nothing(
     bench.stand.set("down")
     answer = bench.run()
     assert isinstance(answer, Failure) and answer.kind == "unavailable"
+    assert answer.message.startswith("Docker is not running. ")
     assert bench.started() == []
 
 

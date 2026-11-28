@@ -6,7 +6,6 @@ kill or interrupt the whole chain at once: the child, the start script,
 """
 
 import asyncio
-import dataclasses
 import fcntl
 import json
 import os
@@ -20,8 +19,7 @@ from pathlib import Path
 from lamplighter.adapters.harbor_jobs import HarborJobs, HarborPaths
 from lamplighter.app.code_revision import REPO_ROOT, code_revision
 from lamplighter.app.config import load_config
-from lamplighter.app.main import tool_entries
-from lamplighter.core import portable_config_id
+from lamplighter.app.main import settings_portable_id
 from lamplighter.ports import HarnessAgentSpec, Job, from_plain, to_plain
 from tests.container_kit import command_user
 from tests.test_bench_trial import quick_settings
@@ -57,13 +55,7 @@ def harness_job(bench: Path, run_set: str, task: str, attempts: int = 1) -> Job:
     settings.parent.mkdir(parents=True)
     settings.write_text(quick_settings())
     config = load_config(settings)
-    portable = portable_config_id(
-        config.model,
-        config.prices,
-        config.run,
-        tool_entries(config),
-        dataclasses.asdict(config.tools),
-    )
+    portable = settings_portable_id(config)
     agent = HarnessAgentSpec(
         kind="harness",
         settings=str(settings),

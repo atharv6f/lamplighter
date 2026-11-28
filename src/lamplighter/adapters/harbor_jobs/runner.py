@@ -116,8 +116,7 @@ class HarborJobs(BenchJobs):
             return Failure(
                 "unavailable",
                 "none",
-                f"Harbor ended with exit code {ended.returncode}. What it printed"
-                f" is in {log}.",
+                f"Harbor ended with exit code {ended.returncode}. See {log}.",
                 _SOURCE,
             )
         return None
