@@ -6,6 +6,7 @@ outcome rule the gate uses.
 """
 
 import asyncio
+import dataclasses
 import json
 import os
 from pathlib import Path
@@ -14,17 +15,20 @@ import pytest
 
 from lamplighter.adapters.harbor_jobs import HarborJobs
 from lamplighter.bench import BoundWord, TrialOutcome, harness_outcome, read_record
-from lamplighter.ports import Failure, TrialFacts
+from lamplighter.ports import Failure, Job, TrialFacts
 from tests.harbor_kit import harbor_paths, harness_job
 
 pytestmark = pytest.mark.container
 TASK = "change-one-port"
+RUN_SET = "made-up--harness"
 
 
 def trial(tmp_path: Path, agent: str, task: str = TASK) -> TrialFacts:
-    bench = tmp_path / "bench"
-    jobs = HarborJobs(harbor_paths(bench, f"scripted_agents:{agent}"))
-    job = harness_job(bench, "made-up--harness", task)
+    return trial_of(tmp_path, agent, harness_job(tmp_path / "bench", RUN_SET, task))
+
+
+def trial_of(tmp_path: Path, agent: str, job: Job) -> TrialFacts:
+    jobs = HarborJobs(harbor_paths(tmp_path / "bench", f"scripted_agents:{agent}"))
     assert asyncio.run(jobs.run(job)) is None
     found = asyncio.run(jobs.trials(job.run_set))
     assert not isinstance(found, Failure), found
@@ -121,6 +125,27 @@ def test_the_agents_container_has_no_network(tmp_path: Path) -> None:
     lines = tool_texts(facts)["n"].splitlines()
     assert lines[1] == "lo"
     assert lines[-1] != "connected=0" and lines[-1].startswith("connected=")
+
+
+def test_the_file_tools_and_the_commands_change_each_others_files(
+    tmp_path: Path,
+) -> None:
+    # In a trial the tools and the commands are one user, as the bench
+    # refuses root. Under root the tests' stand-in user for the commands
+    # could not write a file the tools made, so the job names the runner.
+    job = harness_job(tmp_path / "bench", RUN_SET, TASK)
+    agent = dataclasses.replace(job.agent, run_as=(os.getuid(), os.getgid()))
+    facts = trial_of(
+        tmp_path, "SharesFilesBothWays", dataclasses.replace(job, agent=agent)
+    )
+    texts = tool_texts(facts)
+    assert texts["c"].splitlines() == [
+        "[exit code 0]",
+        "made by a command, edited by a tool",
+        "made by a tool",
+        "changed by a command",
+    ]
+    assert outcome(facts) == TrialOutcome("pass", None)
 
 
 def test_the_key_of_harbors_process_is_in_no_container_and_no_file(

@@ -6,6 +6,7 @@ that is not root, as in a trial.
 
 import asyncio
 import os
+import statistics
 import time
 from collections.abc import Generator, Iterator
 from pathlib import Path
@@ -471,6 +472,24 @@ def test_the_sweep_spares_the_processes_alive_at_the_mark(
     assert all(box.is_alive(int(pid)) for pid in (roots, "1", *first))
     assert box.inside("echo still-running").strip() == "still-running"
     box.kill(int(roots))
+
+
+# The time one command takes.
+
+
+def test_fifty_commands_each_answer_and_their_median_time_is_printed(
+    box: RunningContainer, work: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    executor = contained(box, work)
+    times: list[float] = []
+    for n in range(50):
+        began = time.monotonic()
+        result = ran(executor, shell(work, f"echo {n}"))
+        times.append(time.monotonic() - began)
+        assert (result.exit_code, result.output) == (0, f"{n}\n".encode())
+    # Printed past the capture, so that a run with -q shows the number.
+    with capsys.disabled():
+        print(f"\nmedian of 50 commands: {statistics.median(times) * 1000:.0f} ms")
 
 
 # The shared folder.
