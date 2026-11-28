@@ -21,6 +21,7 @@ FIXED_PROGRAMS = {
     "app/git_output.py": {"git"},
     "adapters/harbor_jobs/leftovers.py": {"docker"},
     "adapters/harbor_jobs/runner.py": {"/bin/sh"},
+    "adapters/openai_chat/port_owner.py": {"/usr/sbin/lsof", "/bin/ps"},
 }
 OS_STARTS = {"fork", "forkpty", "posix_spawn", "posix_spawnp", "system", "popen"}
 

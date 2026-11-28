@@ -48,3 +48,12 @@ def whole_or_none(holder: dict[str, Any], key: str) -> int | None:
     """Give the whole number under `key`, or None when there is none."""
     value = holder.get(key)
     return value if type(value) is int else None
+
+
+def list_or_empty(value: object) -> list[Any]:
+    """Give the value as a list, and an empty list when it is absent."""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise Unreadable(f"expected a list, got {type(value).__name__}")
+    return cast(list[Any], value)
