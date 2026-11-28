@@ -28,6 +28,7 @@ from lamplighter.core.observers import (
 from lamplighter.core.projector_loop import pass_to_the_end, project_while_open
 from lamplighter.core.recovery import UnfinishedSession, UnfinishedWork, unfinished_work
 from lamplighter.core.reply import Reply, fold_reply
+from lamplighter.core.route_table import NamedModel, Route, RouteWhen
 from lamplighter.core.run_deps import Deps
 from lamplighter.core.run_ending import TurnEnd
 from lamplighter.core.run_spans import SPAN_LAYOUT
@@ -56,6 +57,9 @@ __all__ = [
     "Observers",
     "PassDone",
     "Prices",
+    "NamedModel",
+    "Route",
+    "RouteWhen",
     "Reply",
     "RunSettings",
     "RunSpec",

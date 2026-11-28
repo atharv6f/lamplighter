@@ -18,6 +18,9 @@ PROFILE = ModelProfile(
     tool_calls=True,
     cache_hints=4,
     count_error_permille=0,
+    window=200_000,
+    concurrent_requests=4,
+    stays_on_mac=False,
 )
 
 type Answer = httpx.Response | Exception | Callable[[], Awaitable[httpx.Response]]

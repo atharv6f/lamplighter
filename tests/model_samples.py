@@ -108,6 +108,9 @@ PROFILE = ModelProfile(
     tool_calls=True,
     cache_hints=0,
     count_error_permille=0,
+    window=200_000,
+    concurrent_requests=4,
+    stays_on_mac=False,
 )
 
 RECORDS: tuple[object, ...] = (

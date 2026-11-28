@@ -93,7 +93,8 @@ _DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 
 def build_model(config: Config, api_key: str) -> ModelClient:
     """Build the client for the model the settings name."""
-    return AnthropicModel(config.model, api_key, httpx.AsyncClient(), SystemClock())
+    profile = config.default_model().profile
+    return AnthropicModel(profile, api_key, httpx.AsyncClient(), SystemClock())
 
 
 def trace_sink(config: Config, clock: Clock) -> PhoenixSink:
@@ -350,7 +351,7 @@ def trial_parts(api_key: str, revision: str) -> TrialParts:
 
     def model(config: Config) -> TrialModel:
         http = httpx.AsyncClient()
-        client = AnthropicModel(config.model, api_key, http, clock)
+        client = AnthropicModel(config.default_model().profile, api_key, http, clock)
         return TrialModel(client, http.aclose)
 
     return TrialParts(
@@ -418,8 +419,8 @@ def harbor_jobs(bench: Path) -> HarborJobs:
 def settings_portable_id(config: Config) -> str:
     """Give the portable config id of a settings file, without a trial."""
     return portable_config_id(
-        config.model,
-        config.prices,
+        config.models,
+        config.routes,
         config.run,
         tool_entries(config),
         dataclasses.asdict(config.tools),

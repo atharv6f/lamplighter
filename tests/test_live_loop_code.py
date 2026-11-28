@@ -22,6 +22,7 @@ from tests.kill_kit import Turn, answers
 from tests.live import test_loop as live
 from tests.model_by_request import ModelByRequest
 from tests.model_samples import PROFILE
+from tests.settings_text import with_profile
 
 USAGE = Usage(input_uncached=100, cache_read=0, cache_write=0, output=20)
 
@@ -50,7 +51,7 @@ DONE = says("Done.")
 def config() -> Config:
     config = load_config(live.SETTINGS)
     run = dataclasses.replace(config.run, model_max_output=1_000)
-    return dataclasses.replace(config, model=PROFILE, run=run)
+    return dataclasses.replace(with_profile(config, PROFILE), run=run)
 
 
 def no_wall(config: Config) -> Executor:

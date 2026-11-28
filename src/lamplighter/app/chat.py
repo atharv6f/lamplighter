@@ -410,19 +410,20 @@ def run_spec(config: Config, tooling: Tooling, code_revision: str) -> RunSpec:
     settings file gives one system prompt and one tool list in both.
     """
     run = config.run
+    first = config.default_model()
     wall = tooling.executor.wall()
     tools = tooling.tools.list_tools()
     tool_settings = dataclasses.asdict(config.tools)
     return RunSpec(
         config_id=config_id(
-            config.model, config.prices, run, tools, tool_settings, wall
+            config.models, config.routes, run, tools, tool_settings, wall
         ),
         portable_config_id=portable_config_id(
-            config.model, config.prices, run, tools, tool_settings
+            config.models, config.routes, run, tools, tool_settings
         ),
         code_revision=code_revision,
-        model=config.model.model,
-        provider=config.model.adapter,
+        model=first.profile.model,
+        provider=first.profile.adapter,
         system=run.system,
         max_steps=run.max_steps,
         max_seconds=run.max_seconds,
@@ -432,7 +433,7 @@ def run_spec(config: Config, tooling: Tooling, code_revision: str) -> RunSpec:
         model_deadline_ms=run.model_deadline_ms,
         model_retries=run.model_retries,
         cancel_bound_ms=run.cancel_bound_ms,
-        prices=config.prices,
+        prices=first.prices,
         wall=wall,
     )
 

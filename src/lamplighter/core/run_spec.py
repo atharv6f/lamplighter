@@ -39,6 +39,7 @@ class RunSpec:
     on `run_started` too, because the hash cannot be read back. `model` and
     `provider` are the names from the model settings, saved on each model
     request, so a call that gets no reply still says which model was asked.
+    `prices` is None for a model whose replies are not priced.
 
     `portable_config_id` names the same settings on any machine, without
     the wall and the folders, and `code_revision` names the code that runs:
@@ -61,5 +62,5 @@ class RunSpec:
     model_deadline_ms: int
     model_retries: int
     cancel_bound_ms: int
-    prices: Prices
+    prices: Prices | None
     wall: JsonObject

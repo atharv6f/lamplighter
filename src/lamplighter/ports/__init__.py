@@ -78,6 +78,7 @@ from lamplighter.ports.experiment_ledger import (
     StartRow,
 )
 from lamplighter.ports.failure import Failure, FailureEffect, FailureKind
+from lamplighter.ports.health import HealthCheck
 from lamplighter.ports.id_source import IdSource
 from lamplighter.ports.inbound import Inbound, Sender
 from lamplighter.ports.inbox import Accepted, Inbox, InboxEntry
@@ -228,6 +229,7 @@ __all__ = [
     "ModelClient",
     "ModelEvent",
     "ModelProfile",
+    "HealthCheck",
     "ModelRequest",
     "NewEvent",
     "Outcome",

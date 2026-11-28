@@ -5,10 +5,17 @@ import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from lamplighter.adapters.builtin_tools import ToolSettings
-from lamplighter.core import Prices, RunSettings
-from lamplighter.ports import ModelProfile, from_plain
+from lamplighter.app.model_settings import (
+    ModelEntry,
+    check_table,
+    read_models,
+    read_routes,
+)
+from lamplighter.core import Route, RunSettings
+from lamplighter.ports import from_plain
 
 # Folders a sync tool may copy while SQLite has the file open, which can
 # damage it. The first two are the folders iCloud's "Desktop and Documents"
@@ -61,15 +68,34 @@ class TraceSettings:
 
 
 @dataclass(frozen=True, slots=True)
-class Config:
-    """Everything the settings file holds."""
+class _Sections:
+    """The settings file's sections that are tables of their own."""
 
-    model: ModelProfile
-    prices: Prices
     store: StoreSettings
     run: RunSettings
     tools: ToolSettings
     traces: TraceSettings
+
+
+@dataclass(frozen=True, slots=True)
+class Config:
+    """Everything the settings file holds.
+
+    `models` and `routes` are in the order of the file. The first route
+    whose `when` holds is a run's, and only the last route holds always.
+    """
+
+    models: tuple[ModelEntry, ...]
+    routes: tuple[Route, ...]
+    store: StoreSettings
+    run: RunSettings
+    tools: ToolSettings
+    traces: TraceSettings
+
+    def default_model(self) -> ModelEntry:
+        """Give the model an ordinary run starts on: the first of the default route."""
+        first = self.routes[-1].models[0]
+        return next(entry for entry in self.models if entry.name == first)
 
 
 def load_config(path: Path) -> Config:
@@ -77,13 +103,24 @@ def load_config(path: Path) -> Config:
 
     Raises ValueError when the file has a missing, extra or wrongly typed
     setting, a run or tool setting out of its range, a trace setting that
-    is empty or badly formed, or a folder that is not allowed. A wrong
-    settings file is a mistake to fix before anything
-    runs.
+    is empty or badly formed, a folder that is not allowed, or a model or
+    route that breaks a rule of the table. A wrong settings file is a
+    mistake to fix before anything runs.
     """
     with path.open("rb") as file:
-        config = from_plain(Config, tomllib.load(file))
-    check_run(config.run, config.model)
+        plain: dict[str, Any] = tomllib.load(file)
+    if "model" in plain or "prices" in plain:
+        raise ValueError(
+            "the settings now list models under [[models]] and routes under [[routes]]"
+        )
+    models = read_models(plain.pop("models", None))
+    routes = read_routes(plain.pop("routes", None))
+    sections = from_plain(_Sections, plain)
+    check_run(sections.run)
+    check_table(models, routes, sections.run.model_max_output)
+    config = Config(
+        models, routes, sections.store, sections.run, sections.tools, sections.traces
+    )
     check_traces(config.traces)
     home = Path.home()
     store = dataclasses.replace(
@@ -94,7 +131,7 @@ def load_config(path: Path) -> Config:
     return dataclasses.replace(config, store=store, tools=tools)
 
 
-def check_run(run: RunSettings, model: ModelProfile) -> None:
+def check_run(run: RunSettings) -> None:
     """Raise ValueError for a run setting no run could keep to."""
     if not run.system.strip():
         raise ValueError("run.system is empty")
@@ -112,11 +149,6 @@ def check_run(run: RunSettings, model: ModelProfile) -> None:
             raise ValueError(f"{name} must be at least 1, not {value}")
     if run.model_retries < 0:
         raise ValueError(f"run.model_retries must not be negative: {run.model_retries}")
-    if run.model_max_output > model.max_output:
-        raise ValueError(
-            f"run.model_max_output is {run.model_max_output}, above the"
-            f" model's max_output of {model.max_output}"
-        )
 
 
 def check_traces(traces: TraceSettings) -> None:

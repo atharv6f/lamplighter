@@ -66,6 +66,7 @@ from tests.kill_kit import Turn, answers, call, last_said
 from tests.model_by_request import Choose, ModelByRequest
 from tests.model_samples import PROFILE
 from tests.run_history import inbound, stop
+from tests.settings_text import with_profile
 from tests.span_file import SPANS_SENT, SpanFileSink
 from tests.stub_tools import StubTools
 from tests.tooling_kit import tooling_for, with_tool_folders
@@ -332,7 +333,7 @@ def config_for(folder: Path, cancel_bound_ms: int) -> Config:
         config.run, model_max_output=1_000, cancel_bound_ms=cancel_bound_ms
     )
     return dataclasses.replace(
-        with_tool_folders(config, folder), model=PROFILE, run=run
+        with_profile(with_tool_folders(config, folder), PROFILE), run=run
     )
 
 

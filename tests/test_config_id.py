@@ -1,9 +1,28 @@
 """The config ids: one hash over the six parts of a run, and one without its place."""
 
 import dataclasses
+from dataclasses import dataclass
 
-from lamplighter.core import Prices, RunSettings, config_id, portable_config_id
+from lamplighter.core import (
+    NamedModel,
+    Prices,
+    Route,
+    RunSettings,
+    config_id,
+    portable_config_id,
+)
 from lamplighter.ports import JsonObject, ModelProfile, ToolEntry, ToolSpec
+
+
+@dataclass(frozen=True, slots=True)
+class LocalEntry:
+    """A made-up entry for a model on this Mac, with fields the core never reads."""
+
+    name: str
+    profile: ModelProfile
+    weights_sha256: str
+    server: str
+
 
 MODEL = ModelProfile(
     adapter="anthropic",
@@ -12,9 +31,30 @@ MODEL = ModelProfile(
     tool_calls=True,
     cache_hints=4,
     count_error_permille=50,
+    window=200_000,
+    concurrent_requests=4,
+    stays_on_mac=False,
 )
 PRICES = Prices(
     input_uncached=4_000_000, cache_read=200_000, cache_write=5_000_000, output=1
+)
+LOCAL = LocalEntry(
+    name="local",
+    profile=dataclasses.replace(
+        MODEL,
+        adapter="openai_chat",
+        model="local",
+        cache_hints=0,
+        window=65_536,
+        stays_on_mac=True,
+    ),
+    weights_sha256="0" * 64,
+    server="llama.cpp b12826",
+)
+MODELS: tuple[object, ...] = (NamedModel("frontier", MODEL, PRICES), LOCAL)
+ROUTES = (
+    Route("private", "private", ("local",)),
+    Route("default", "always", ("local", "frontier")),
 )
 RUN = RunSettings(
     system="You are a made-up helper.",
@@ -50,21 +90,64 @@ WALL: JsonObject = {"adapter": "seatbelt", "profile_sha256": "a" * 64}
 # Worked out once from the saved JSON text of the six, checked by running
 # sha256sum on that text, and pinned here, so a change to how the id is
 # made shows up as a change to this value.
-PINNED = "4f06cb3ccacebcf2374bf501d738ce6a1c2ad95b9e5126b499b8df1c29a3d839"
+PINNED = "def116421111552db8fab2de176fc59109d635a7ddcef9ecd5848bff7b6d9f60"
 # The portable id of the same five, without the wall and the three
 # settings of where it runs, worked out and checked the same way.
-PORTABLE_PINNED = "00ed0550242f7b636aec8ef3db275d98431345b9c733d7f7b0e0081be1de353e"
+PORTABLE_PINNED = "6f31ec738694a9ae481218f387e58ed5d1b4f916b57b38659a88c113e19fe973"
 
 
 def made(
-    model: ModelProfile = MODEL,
-    prices: Prices = PRICES,
+    models: tuple[object, ...] = MODELS,
+    routes: tuple[Route, ...] = ROUTES,
     run: RunSettings = RUN,
     tools: tuple[ToolEntry, ...] = (ENTRY,),
     tool_settings: JsonObject = TOOL_SETTINGS,
     wall: JsonObject = WALL,
 ) -> str:
-    return config_id(model, prices, run, tools, tool_settings, wall)
+    return config_id(models, routes, run, tools, tool_settings, wall)
+
+
+def models_changed() -> list[tuple[object, ...]]:
+    """Give the made-up models with one thing changed in each."""
+    frontier = NamedModel("frontier", MODEL, PRICES)
+    return [
+        (
+            dataclasses.replace(
+                frontier, profile=dataclasses.replace(MODEL, max_output=2_001)
+            ),
+            LOCAL,
+        ),
+        (
+            dataclasses.replace(frontier, prices=dataclasses.replace(PRICES, output=2)),
+            LOCAL,
+        ),
+        (frontier, dataclasses.replace(LOCAL, weights_sha256="1" * 64)),
+        (frontier, dataclasses.replace(LOCAL, server="llama.cpp b12827")),
+        (
+            frontier,
+            dataclasses.replace(
+                LOCAL, profile=dataclasses.replace(LOCAL.profile, window=32_768)
+            ),
+        ),
+        (
+            frontier,
+            dataclasses.replace(
+                LOCAL, profile=dataclasses.replace(LOCAL.profile, stays_on_mac=False)
+            ),
+        ),
+        (LOCAL, frontier),
+    ]
+
+
+def routes_changed() -> list[tuple[Route, ...]]:
+    """Give the made-up routes with one thing changed in each."""
+    private, default = ROUTES
+    return [
+        (private, dataclasses.replace(default, models=("frontier", "local"))),
+        (private, dataclasses.replace(default, id="ordinary")),
+        (dataclasses.replace(private, id="secret"), default),
+        (default,),
+    ]
 
 
 def test_the_id_of_known_settings_is_the_pinned_value() -> None:
@@ -73,8 +156,8 @@ def test_the_id_of_known_settings_is_the_pinned_value() -> None:
 
 def test_a_change_to_any_of_the_six_gives_another_id() -> None:
     changed = [
-        made(model=dataclasses.replace(MODEL, max_output=2_001)),
-        made(prices=dataclasses.replace(PRICES, output=2)),
+        *(made(models=models) for models in models_changed()),
+        *(made(routes=routes) for routes in routes_changed()),
         made(run=dataclasses.replace(RUN, max_steps=41)),
         made(run=dataclasses.replace(RUN, system="Hi.")),
         made(tools=()),
@@ -102,13 +185,13 @@ def test_the_same_settings_always_give_the_same_id() -> None:
 
 
 def portable(
-    model: ModelProfile = MODEL,
-    prices: Prices = PRICES,
+    models: tuple[object, ...] = MODELS,
+    routes: tuple[Route, ...] = ROUTES,
     run: RunSettings = RUN,
     tools: tuple[ToolEntry, ...] = (ENTRY,),
     tool_settings: JsonObject = TOOL_SETTINGS,
 ) -> str:
-    return portable_config_id(model, prices, run, tools, tool_settings)
+    return portable_config_id(models, routes, run, tools, tool_settings)
 
 
 def test_the_portable_id_of_known_settings_is_the_pinned_value() -> None:
@@ -140,8 +223,8 @@ def test_the_folders_the_path_and_the_wall_are_not_in_the_portable_id() -> None:
 
 def test_a_change_to_any_of_the_five_gives_another_portable_id() -> None:
     changed = [
-        portable(model=dataclasses.replace(MODEL, max_output=2_001)),
-        portable(prices=dataclasses.replace(PRICES, output=2)),
+        *(portable(models=models) for models in models_changed()),
+        *(portable(routes=routes) for routes in routes_changed()),
         portable(run=dataclasses.replace(RUN, max_steps=1)),
         portable(run=dataclasses.replace(RUN, system="Hi.")),
         portable(tools=()),

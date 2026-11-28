@@ -3,11 +3,18 @@
 # reject it. A test fails if anything else differs.
 # Settings for Lamplighter. No secret goes in this file.
 
-# The model, and what it can do on Anthropic's API.
-# The limits are from Anthropic's models page, read on 26 November 2026.
-[model]
+# Every model the routes may use, one [[models]] table each. A run picks
+# its model from the routes below; nothing else in this file names one.
+
+# The frontier model, on Anthropic's API.
+[[models]]
+name = "frontier"
 adapter = "anthropic"
 model = "claude-opus-5-5"
+# The largest prompt plus output, and the most output of one call, from
+# Anthropic's models page, read on 28 November 2026:
+# https://platform.claude.com/docs/en/about-claude/models/overview
+window = 1_000_000
 max_output = 128_000
 tool_calls = true
 cache_hints = 4
@@ -15,15 +22,24 @@ cache_hints = 4
 # that size. The live token count test measured a gap of 0 on three prompts
 # on 26 November 2026. The docs call the count an estimate, so some room stays.
 count_error_permille = 50
-
+# How many of this model's calls may run at once.
+concurrent_requests = 4
 # What one million tokens cost, in whole micro-dollars. A micro-dollar is a
 # millionth of a dollar, so 4_000_000 is $4.00.
 # From Anthropic's pricing page for this model, read on 26 November 2026.
-[prices]
+[models.prices]
 input_uncached = 4_000_000
 cache_read = 200_000
 cache_write = 5_000_000
 output = 20_000_000
+
+# The rule table. The first route whose `when` holds is the run's, and the
+# last must hold always. Each route lists its models weakest first: a run
+# starts as low as it can and moves up only when the model struggles.
+[[routes]]
+id = "default"
+when = "always"
+models = ["frontier"]
 
 # Where the saved state lives: one SQLite file and a folder of blobs.
 # Keep it out of ~/Documents, ~/Desktop and iCloud Drive. A sync tool that

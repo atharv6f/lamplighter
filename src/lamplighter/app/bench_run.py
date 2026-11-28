@@ -183,7 +183,7 @@ def _loose_job(
     settings: LoadedSettings,
     revision: str,
 ) -> tuple[Job, RunSetPlan] | str:
-    model = settings.config.model
+    model = settings.config.default_model().profile
     planned = RunSetPlan(
         run_set=name,
         harness=harness,
@@ -272,8 +272,8 @@ async def _side(parts: BenchParts, plan: PlanRow, side: Side, revision: str) -> 
         split=plan.body.split,
         trials_per_task=plan.body.trials_per_task,
         tasks=plan.body.tasks,
-        model=copy.config.model.model,
-        provider=copy.config.model.adapter,
+        model=copy.config.default_model().profile.model,
+        provider=copy.config.default_model().profile.adapter,
     )
     attempts = plan.body.trials_per_task
     job = _harness_job(parts, name, plan.body.tasks, attempts, copy, revision)

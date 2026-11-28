@@ -3,14 +3,14 @@
 import hashlib
 from collections.abc import Sequence
 
-from lamplighter.core.cost import Prices
+from lamplighter.core.route_table import Route
 from lamplighter.core.run_spec import RunSettings
-from lamplighter.ports import JsonObject, ModelProfile, ToolEntry, saved_json
+from lamplighter.ports import JsonObject, ToolEntry, saved_json
 
 
 def config_id(
-    model: ModelProfile,
-    prices: Prices,
+    models: Sequence[object],
+    routes: Sequence[Route],
     run: RunSettings,
     tools: Sequence[ToolEntry],
     tool_settings: JsonObject,
@@ -18,10 +18,13 @@ def config_id(
 ) -> str:
     """Give the SHA-256 of the saved JSON of the six, as 64 hex characters.
 
-    `tools` are the entries, each with its spec, class, cap and taint flag.
-    `tool_settings` is the settings file's section for the tools, and
-    `wall` the executor's record of its wall, so a new profile, a new
-    version of the system or a moved work folder each give a new id.
+    `models` are the settings' model entries, each a record with all its
+    fields and its prices, and `routes` the rule table, both in the order of
+    the file. So a new weights hash, server version, window, ladder or
+    route id each give a new id. `tools` are the entries, each with its
+    spec, class, cap and taint flag. `tool_settings` is the settings file's
+    section for the tools, and `wall` the executor's record of its wall, so
+    a new version of the system or a moved work folder each give a new id.
 
     A run saves it when it starts, so a run found open under other settings
     after a restart is ended and not carried on. The saved form is hashed,
@@ -30,8 +33,8 @@ def config_id(
     """
     text = saved_json(
         {
-            "model": model,
-            "prices": prices,
+            "models": models,
+            "routes": routes,
             "run": run,
             "tools": tools,
             "tool_settings": tool_settings,
@@ -47,8 +50,8 @@ _PLACE_SETTINGS = ("work_dir", "scratch_dir", "shell_path")
 
 
 def portable_config_id(
-    model: ModelProfile,
-    prices: Prices,
+    models: Sequence[object],
+    routes: Sequence[Route],
     run: RunSettings,
     tools: Sequence[ToolEntry],
     tool_settings: JsonObject,
@@ -64,8 +67,8 @@ def portable_config_id(
     }
     text = saved_json(
         {
-            "model": model,
-            "prices": prices,
+            "models": models,
+            "routes": routes,
             "run": run,
             "tools": tools,
             "tool_settings": kept,

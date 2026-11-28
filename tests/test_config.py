@@ -12,56 +12,12 @@ from lamplighter.app.config import (
     store_folder,
 )
 from lamplighter.app.main import build_model
-from lamplighter.core import Prices, RunSettings
+from lamplighter.app.model_settings import ModelEntry
+from lamplighter.core import Prices, Route, RunSettings
 from lamplighter.ports import ModelProfile
+from tests.settings_text import GOOD
 
 SETTINGS = Path(__file__).parents[1] / "lamplighter.toml"
-
-GOOD = """
-[model]
-adapter = "anthropic"
-model = "made-up-1"
-max_output = 2_000
-tool_calls = true
-cache_hints = 4
-count_error_permille = 25
-
-[prices]
-input_uncached = 4_000_000
-cache_read = 200_000
-cache_write = 5_000_000
-output = 20_000_000
-
-[store]
-dir = "~/.lamplighter"
-max_record_bytes = 4_194_304
-max_blob_bytes = 67_108_864
-
-[run]
-system = "You are a made-up helper."
-max_steps = 40
-max_seconds = 1_200
-max_tokens = 1_000_000
-max_micro_dollars = 1_000_000
-model_max_output = 1_000
-model_deadline_ms = 600_000
-model_retries = 2
-cancel_bound_ms = 800
-
-[tools]
-work_dir = "~/made-up-work"
-scratch_dir = "~/made-up-scratch"
-shell_path = "/usr/bin:/bin"
-shell_default_seconds = 120
-shell_max_seconds = 600
-output_cap_chars = 30_000
-fetch_max_bytes = 5_242_880
-fetch_seconds = 30
-
-[traces]
-phoenix_url = "http://127.0.0.1:6006"
-project = "made-up-project"
-"""
 
 
 def write(folder: Path, text: str) -> Path:
@@ -72,20 +28,25 @@ def write(folder: Path, text: str) -> Path:
 
 def test_a_settings_file_is_read_into_records(tmp_path: Path) -> None:
     config = load_config(write(tmp_path, GOOD))
-    assert config.model == ModelProfile(
+    profile = ModelProfile(
         adapter="anthropic",
         model="made-up-1",
         max_output=2_000,
         tool_calls=True,
         cache_hints=4,
         count_error_permille=25,
+        window=200_000,
+        concurrent_requests=4,
+        stays_on_mac=False,
     )
-    assert config.prices == Prices(
+    prices = Prices(
         input_uncached=4_000_000,
         cache_read=200_000,
         cache_write=5_000_000,
         output=20_000_000,
     )
+    assert config.models == (ModelEntry("frontier", profile, prices, None),)
+    assert config.routes == (Route("default", "always", ("frontier",)),)
 
 
 def test_the_store_folder_is_read_as_an_absolute_path_in_the_home_folder(
@@ -166,7 +127,7 @@ def test_no_retries_is_accepted(tmp_path: Path) -> None:
 def test_settings_cannot_be_changed_once_read(tmp_path: Path) -> None:
     config = load_config(write(tmp_path, GOOD))
     with pytest.raises(dataclasses.FrozenInstanceError):
-        config.prices = config.prices  # pyright: ignore[reportAttributeAccessIssue]
+        config.models = config.models  # pyright: ignore[reportAttributeAccessIssue]
 
 
 @pytest.mark.parametrize(
@@ -176,7 +137,7 @@ def test_settings_cannot_be_changed_once_read(tmp_path: Path) -> None:
         ("max_output = 2_000\n", 'max_output = "2_000"\n'),
         ("max_output = 2_000\n", "max_output = 2_000\ncolour = 3\n"),
         ("output = 20_000_000\n", "output = 20.5\n"),
-        ("[prices]", "[costs]"),
+        ("[models.prices]", "[models.costs]"),
         ("tool_calls = true\n", "tool_calls = 1\n"),
         ("max_blob_bytes = 67_108_864\n", ""),
         ('dir = "~/.lamplighter"', 'dir = "~/Documents/state"'),
@@ -356,16 +317,21 @@ def test_the_settings_file_in_the_repo_holds_the_first_tool_settings() -> None:
 
 def test_the_settings_file_in_the_repo_names_the_model_and_its_prices() -> None:
     config = load_config(SETTINGS)
-    assert config.model.adapter == "anthropic"
-    assert config.model.model == "claude-opus-5-5"
-    assert config.model.max_output == 128_000
-    assert config.model.cache_hints == 4
-    assert config.prices == Prices(
+    frontier = config.default_model()
+    assert frontier.name == "frontier"
+    assert frontier.profile.adapter == "anthropic"
+    assert frontier.profile.model == "claude-opus-5-5"
+    assert frontier.profile.window == 1_000_000
+    assert frontier.profile.max_output == 128_000
+    assert frontier.profile.cache_hints == 4
+    assert not frontier.profile.stays_on_mac
+    assert frontier.prices == Prices(
         input_uncached=4_000_000,
         cache_read=200_000,
         cache_write=5_000_000,
         output=20_000_000,
     )
+    assert config.routes == (Route("default", "always", ("frontier",)),)
 
 
 def test_the_settings_file_in_the_repo_keeps_the_store_out_of_the_checkout() -> None:
@@ -400,4 +366,4 @@ def test_the_settings_file_in_the_repo_sends_spans_to_a_phoenix_on_this_mac() ->
 def test_the_builder_gives_a_client_for_the_model_in_the_settings() -> None:
     config = load_config(SETTINGS)
     client = build_model(config, "made-up-key-0000")
-    assert client.profile == config.model
+    assert client.profile == config.default_model().profile

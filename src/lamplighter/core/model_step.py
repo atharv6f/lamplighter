@@ -144,7 +144,7 @@ async def _read_stream(
 def _reply_payload(reply: Reply, spec: RunSpec) -> JsonObject:
     """Give the saved form of a reply, with its cost when the cost is known."""
     payload = cast(dict[str, Any], to_plain(reply))
-    if reply.usage is not None:
+    if reply.usage is not None and spec.prices is not None:
         cost = cost_micro_dollars(reply.usage, spec.prices)
         if cost is not None:
             payload["cost_micro_dollars"] = cost
