@@ -1,0 +1,25 @@
+[project]
+name = "lamplighter-bench-harbor"
+version = "0.1.0"
+description = "The pinned Harbor that runs the bench, and the two classes it imports."
+requires-python = ">=3.13"
+dependencies = [
+    "harbor==0.27.0",
+    # The harness from this checkout, so a trial runs the code that is here.
+    "lamplighter",
+    # Held at the version in the harness's own lock, so the bench measures
+    # the harness on the HTTP library the service runs on.
+    "httpx==0.28.1",
+]
+
+[tool.uv]
+# The two classes are imported from this folder, by PYTHONPATH, and the
+# project itself is not a package.
+package = false
+
+[tool.uv.sources]
+lamplighter = { path = "../..", editable = true }
+
+[dependency-groups]
+# At the version in the harness's own lock.
+dev = ["pyright==1.1.414"]

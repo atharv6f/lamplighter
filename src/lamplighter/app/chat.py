@@ -25,6 +25,7 @@ from lamplighter.core import (
     config_id,
     drive,
     pass_to_the_end,
+    portable_config_id,
     project_while_open,
     run_intake,
     take,
@@ -117,7 +118,8 @@ class ChatParts:
     the store is opened only once the folder is locked, the tools are made
     only once their folders are, with the store's blobs, and the terminal is
     made only once the session id is known. The chat sends the spans of
-    the log to `sink` and keeps how far it got in `cursor`.
+    the log to `sink` and keeps how far it got in `cursor`. `code_revision`
+    names the code this process runs, and every run saves it.
     """
 
     model: ModelClient
@@ -130,6 +132,7 @@ class ChatParts:
     errors: TextIO
     sink: TraceSink
     cursor: TraceCursor
+    code_revision: str
 
 
 def chat(config: Config, session_id: str | None, parts: ChatParts) -> int:
@@ -212,7 +215,7 @@ async def _serve(
     projector = TraceProjector(stores.log, parts.sink, parts.cursor)
     failed = await _talk(
         session_id,
-        run_spec(config, tooling),
+        run_spec(config, tooling, parts.code_revision),
         deps,
         terminal,
         tooling.executor,
@@ -400,19 +403,24 @@ def check_schemas(tools: ToolProvider) -> None:
             )
 
 
-def run_spec(config: Config, tooling: Tooling) -> RunSpec:
-    """Build the spec every run of this process keeps, with its config id."""
+def run_spec(config: Config, tooling: Tooling, code_revision: str) -> RunSpec:
+    """Build the spec every run of this process keeps, with its two config ids.
+
+    `chat` and a trial of the bench both build their spec here, so one
+    settings file gives one system prompt and one tool list in both.
+    """
     run = config.run
     wall = tooling.executor.wall()
+    tools = tooling.tools.list_tools()
+    tool_settings = dataclasses.asdict(config.tools)
     return RunSpec(
         config_id=config_id(
-            config.model,
-            config.prices,
-            run,
-            tooling.tools.list_tools(),
-            dataclasses.asdict(config.tools),
-            wall,
+            config.model, config.prices, run, tools, tool_settings, wall
         ),
+        portable_config_id=portable_config_id(
+            config.model, config.prices, run, tools, tool_settings
+        ),
+        code_revision=code_revision,
         model=config.model.model,
         provider=config.model.adapter,
         system=run.system,

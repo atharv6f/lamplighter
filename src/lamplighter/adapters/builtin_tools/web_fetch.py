@@ -93,6 +93,23 @@ def system_web() -> WebAccess:
     )
 
 
+def closed_web() -> WebAccess:
+    """Give no network: every name lookup fails, so no fetch opens a connection.
+
+    Every fetch looks its name up first, also an address given as plain
+    numbers, and answers with the tool's own result when the lookup fails.
+    The transport is never reached, and it too raises.
+    """
+
+    async def resolve(host: str, port: int) -> tuple[str, ...]:
+        raise socket.gaierror(socket.EAI_NONAME, "There is no network here.")
+
+    def transport() -> httpx.AsyncBaseTransport:
+        raise RuntimeError("There is no network here.")
+
+    return WebAccess(resolve=resolve, transport=transport)
+
+
 async def web_fetch(
     settings: ToolSettings, web: WebAccess, clock: Clock, arguments: JsonObject
 ) -> ToolResult:

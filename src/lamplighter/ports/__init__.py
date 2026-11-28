@@ -1,5 +1,16 @@
 """The interfaces the core calls. One file per interface."""
 
+from lamplighter.ports.bench_jobs import (
+    AgentSpec,
+    BenchJobs,
+    CheckEnd,
+    HarnessAgentSpec,
+    Job,
+    RecordedTokens,
+    ReferenceAgentSpec,
+    RunnerAgentSpec,
+    TrialFacts,
+)
 from lamplighter.ports.blob_check import blob_damage, check_handle, check_put
 from lamplighter.ports.blob_store import BlobHandle, BlobStore
 from lamplighter.ports.channel import Channel
@@ -48,6 +59,24 @@ from lamplighter.ports.executor import (
     Profile,
     refused_command,
 )
+from lamplighter.ports.experiment_ledger import (
+    CorrectionBody,
+    CorrectionRow,
+    DecisionBody,
+    DecisionRow,
+    ExperimentLedger,
+    LedgerRow,
+    PlanBody,
+    PlanRow,
+    RunSetBody,
+    RunSetRow,
+    RunSetSide,
+    SettingsFile,
+    Side,
+    SplitName,
+    StartBody,
+    StartRow,
+)
 from lamplighter.ports.failure import Failure, FailureEffect, FailureKind
 from lamplighter.ports.id_source import IdSource
 from lamplighter.ports.inbound import Inbound, Sender
@@ -65,6 +94,12 @@ from lamplighter.ports.json_text import (
     saved_size,
 )
 from lamplighter.ports.json_value import JsonObject, JsonValue
+from lamplighter.ports.ledger_check import (
+    held_out_uses,
+    read_row,
+    refused_row,
+    row_text,
+)
 from lamplighter.ports.model import (
     CacheHint,
     ErrorEvent,
@@ -110,6 +145,35 @@ from lamplighter.ports.upcast import upcast
 from lamplighter.ports.value_rules import is_hash, is_id
 
 __all__ = [
+    "AgentSpec",
+    "BenchJobs",
+    "HarnessAgentSpec",
+    "Job",
+    "RunnerAgentSpec",
+    "CorrectionBody",
+    "CorrectionRow",
+    "DecisionBody",
+    "DecisionRow",
+    "ExperimentLedger",
+    "LedgerRow",
+    "PlanBody",
+    "PlanRow",
+    "RunSetBody",
+    "RunSetRow",
+    "RunSetSide",
+    "SettingsFile",
+    "Side",
+    "SplitName",
+    "StartBody",
+    "StartRow",
+    "held_out_uses",
+    "read_row",
+    "refused_row",
+    "row_text",
+    "CheckEnd",
+    "RecordedTokens",
+    "ReferenceAgentSpec",
+    "TrialFacts",
     "CursorMark",
     "Span",
     "SpanKind",

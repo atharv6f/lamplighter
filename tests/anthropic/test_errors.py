@@ -6,8 +6,10 @@ from lamplighter.adapters.anthropic.errors import failure_for_response, may_retr
 from lamplighter.ports import Failure, JsonValue
 
 
-def error_body(error_type: str, details: JsonValue = None) -> bytes:
-    problem: dict[str, JsonValue] = {"type": error_type, "message": "Made up."}
+def error_body(
+    error_type: str, details: JsonValue = None, message: str = "Made up."
+) -> bytes:
+    problem: dict[str, JsonValue] = {"type": error_type, "message": message}
     if details is not None:
         problem["details"] = details
     return json.dumps({"type": "error", "error": problem}).encode()
@@ -104,6 +106,38 @@ def test_the_spend_cap_code_only_counts_on_its_own_status() -> None:
     details = {"error_code": "enforced_spend_limit_reached"}
     failure = failure_for_response(400, {}, error_body("made_up_error", details))
     assert failure.kind == "invalid_input"
+
+
+# Made up, in the words Anthropic's errors page gives for a reached limit.
+SPEND_LIMIT = (
+    "You have reached your specified API usage limits. You will regain access"
+    " on 2026-12-01 at 00:00 UTC."
+)
+
+
+def test_a_reached_spend_limit_needs_a_person_and_is_not_a_wrong_request() -> None:
+    body = error_body("invalid_request_error", message=SPEND_LIMIT)
+    failure = failure_for_response(400, {}, body)
+    assert failure.kind == "needs_user"
+    assert not may_retry(failure, None)
+    assert failure.detail["provider_message"] == SPEND_LIMIT
+    assert failure.message == "Anthropic's API refused this account or key."
+
+
+@pytest.mark.parametrize(
+    ("status", "message"),
+    [
+        (400, "Made up."),
+        (400, "The model said: You have reached your specified limit."),
+        (400, "you have reached your specified API usage limits."),
+        (422, SPEND_LIMIT),
+    ],
+)
+def test_any_other_wrong_request_is_still_invalid_input(
+    status: int, message: str
+) -> None:
+    body = error_body("invalid_request_error", message=message)
+    assert failure_for_response(status, {}, body).kind == "invalid_input"
 
 
 def test_the_detail_keeps_what_a_log_needs() -> None:

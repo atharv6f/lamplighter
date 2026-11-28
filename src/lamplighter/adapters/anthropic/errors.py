@@ -42,6 +42,11 @@ _RETRIED_KINDS: frozenset[FailureKind] = frozenset(
 # The account has spent its monthly allowance. Waiting does not help: a person
 # has to act. The status is the same 429 as a request to slow down.
 _SPEND_CAP_CODE = "enforced_spend_limit_reached"
+# A spend limit set in the Console has been reached. Anthropic's errors page
+# says such requests "return HTTP 400 with error type invalid_request_error"
+# and a message that starts with these words. Like the cap above, only a
+# person can lift it, so the request itself is not what is wrong.
+_SPEND_LIMIT_WORDS = "You have reached your specified"
 
 _SECONDS = re.compile(r"\d+(\.\d+)?")
 
@@ -97,7 +102,7 @@ def failure_for_response(
     """
     error = _error_in(body)
     code = _object_or_empty(error.get("details")).get("error_code")
-    kind = _kind_for(status, error.get("type"), code)
+    kind = _kind_for(status, error.get("type"), code, error.get("message"))
     detail: dict[str, JsonValue] = {
         "status": status,
         "error_type": error.get("type"),
@@ -135,11 +140,19 @@ def _object_or_empty(value: object) -> dict[str, Any]:
         return {}
 
 
-def _kind_for(status: int, error_type: object, code: object) -> FailureKind:
+def _kind_for(
+    status: int, error_type: object, code: object, message: object
+) -> FailureKind:
     # The API also sends this error type with other statuses, such as 500.
     if error_type == "timeout_error":
         return "timeout"
     if status == 429 and code == _SPEND_CAP_CODE:
+        return "needs_user"
+    if (
+        status == 400
+        and isinstance(message, str)
+        and message.startswith(_SPEND_LIMIT_WORDS)
+    ):
         return "needs_user"
     if status in _KIND_BY_STATUS:
         return _KIND_BY_STATUS[status]

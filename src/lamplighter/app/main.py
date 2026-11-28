@@ -2,10 +2,13 @@
 
 import argparse
 import asyncio
+import dataclasses
+import functools
 import os
 import re
 import sqlite3
 import sys
+import tempfile
 from collections.abc import Callable, Sequence
 from datetime import date
 from pathlib import Path
@@ -14,14 +17,24 @@ from typing import TextIO
 import httpx
 
 from lamplighter.adapters import (
+    FakeExecutor,
     FileBlobStore,
+    FileLedger,
     FileTraceCursor,
     SystemClock,
     SystemIds,
     TerminalChannel,
 )
 from lamplighter.adapters.anthropic import AnthropicModel
-from lamplighter.adapters.builtin_tools import BuiltinTools, system_web
+from lamplighter.adapters.builtin_tools import (
+    BuiltinTools,
+    ToolSettings,
+    closed_web,
+    system_web,
+)
+from lamplighter.adapters.container import AsRoot, ContainerExecutor
+from lamplighter.adapters.harbor_jobs import HarborJobs, HarborPaths
+from lamplighter.adapters.in_memory import InMemoryBlobStore
 from lamplighter.adapters.phoenix import PhoenixSink, local_address
 from lamplighter.adapters.seatbelt import SeatbeltExecutor
 from lamplighter.adapters.sqlite import (
@@ -35,22 +48,43 @@ from lamplighter.adapters.sqlite import (
     open_database,
     store_sizes,
 )
+from lamplighter.app.bench_commands import add_bench_parts, bench_command
+from lamplighter.app.bench_parts import BenchParts
+from lamplighter.app.bench_settings import (
+    BenchSettings,
+    harbor_version,
+    load_bench_settings,
+)
+from lamplighter.app.bench_trial import (
+    TrialModel,
+    TrialParts,
+    TrialRequest,
+    TrialStore,
+    run_trial,
+)
 from lamplighter.app.chat import OFF_THIS_MAC, ChatParts, Stores, Tooling, chat
+from lamplighter.app.code_revision import REPO_ROOT, code_revision
 from lamplighter.app.config import Config, load_config
 from lamplighter.app.report import day_lines
 from lamplighter.app.traces import export_spans, reset_cursor
-from lamplighter.core import SPAN_LAYOUT
+from lamplighter.bench import TrialRecord
+from lamplighter.core import SPAN_LAYOUT, portable_config_id
 from lamplighter.ports import (
     BlobStore,
     Clock,
+    Command,
+    Executor,
     Failure,
     ModelClient,
+    ToolEntry,
+    ToolProvider,
     TraceCursor,
     TraceSink,
     canonical_json,
 )
 
 NO_KEY = "ANTHROPIC_API_KEY is not set."
+BENCH = REPO_ROOT / "bench"
 # How long a write waits for another process that holds the store's lock.
 STORE_TIMEOUT_S = 5.0
 _DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
@@ -91,6 +125,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command is None:
         print("lamplighter: nothing to run yet")
         return 0
+    if args.command == "bench":
+        # The settings file is the bench's to load: a plan refuses one that
+        # does not load, with its own line.
+        return _bench(args)
     config = load_config(args.config)
     if args.command == "chat":
         return _chat(config, args.session)
@@ -142,6 +180,7 @@ def _parser() -> argparse.ArgumentParser:
     steps.add_parser("reset", help="send every span again at the next export")
     report = commands.add_parser("report", help="report one day from the log")
     report.add_argument("--day", type=_day, help="the day in UTC, as YYYY-MM-DD")
+    add_bench_parts(commands.add_parser("bench", help="run the bench and the gate"))
     return parser
 
 
@@ -171,6 +210,7 @@ def _chat(config: Config, session_id: str | None) -> int:
         sys.stdin.fileno(),
         sys.stdout,
         sys.stderr,
+        code_revision(REPO_ROOT),
     )
     return chat(config, session_id, parts)
 
@@ -189,6 +229,24 @@ def builtin_tooling(config: Config, clock: Clock) -> Callable[[BlobStore], Tooli
     return build
 
 
+def tool_entries(config: Config) -> tuple[ToolEntry, ...]:
+    """List the built-in tools the settings give, without a wall or a store.
+
+    The tools are built on a fake executor, an empty folder and blobs in
+    memory, only to be listed: the list does not depend on any of them.
+    """
+    with tempfile.TemporaryDirectory() as folder:
+        settings = dataclasses.replace(config.tools, work_dir=folder)
+        blobs = InMemoryBlobStore(config.store.max_blob_bytes)
+        executor = FakeExecutor(Path(folder), _no_command)
+        built = BuiltinTools(settings, blobs, executor, SystemClock(), closed_web())
+        return built.list_tools()
+
+
+def _no_command(command: Command) -> Failure:
+    return Failure("fatal", "none", "Only listed, never run.", "tool_entries")
+
+
 def chat_parts(
     config: Config,
     model: ModelClient,
@@ -198,11 +256,12 @@ def chat_parts(
     reader: int,
     writer: TextIO,
     errors: TextIO,
+    revision: str,
 ) -> ChatParts:
     """Build a chat on the SQLite store and a terminal that reads `reader`.
 
     The chat sends the spans of its log to `sink`, and keeps how far it got
-    in `cursor`.
+    in `cursor`. Every run saves `revision` as the code that made it.
     """
     clock = SystemClock()
     ids = SystemIds()
@@ -224,6 +283,7 @@ def chat_parts(
         errors,
         sink,
         cursor,
+        revision,
     )
 
 
@@ -232,6 +292,16 @@ def sqlite_stores(folder: Path, config: Config, clock: Clock) -> Stores | Failur
     connection = open_database(folder / "state.db", STORE_TIMEOUT_S)
     if isinstance(connection, Failure):
         return connection
+    return stores_on(connection, folder, config, clock)
+
+
+def stores_on(
+    connection: sqlite3.Connection, folder: Path, config: Config, clock: Clock
+) -> Stores:
+    """Build the stores on an open store file, with the blob folder in `folder`.
+
+    Closing the stores closes the connection.
+    """
     max_record_bytes = config.store.max_record_bytes
     return Stores(
         log=SqliteEventLog(connection, {}, max_record_bytes),
@@ -241,6 +311,134 @@ def sqlite_stores(folder: Path, config: Config, clock: Clock) -> Stores | Failur
         blobs=FileBlobStore(folder / "blobs", clock, config.store.max_blob_bytes),
         close=connection.close,
     )
+
+
+def trial_store(folder: Path, config: Config, clock: Clock) -> TrialStore | Failure:
+    """Open a new store for one trial in `folder`, and say how to export its session.
+
+    The trial holds the connection, because the export reads it.
+    """
+    folder.mkdir(mode=0o700)
+    connection = open_database(folder / "state.db", STORE_TIMEOUT_S)
+    if isinstance(connection, Failure):
+        return connection
+    stores = stores_on(connection, folder, config, clock)
+
+    async def export(session_id: str, into: Path) -> int | Failure:
+        made = await export_session(connection, stores.blobs, session_id, into, clock)
+        return made if isinstance(made, Failure) else made.events
+
+    return TrialStore(stores, export)
+
+
+def trial_parts(api_key: str, revision: str) -> TrialParts:
+    """Build the parts of a trial on the real stores, the container and the model.
+
+    Web access is closed in a trial: every fetch gets the tool's own result
+    for a name that cannot be found.
+    """
+    clock = SystemClock()
+
+    def executor(
+        as_root: AsRoot, user: tuple[int, int], work: Path
+    ) -> ContainerExecutor:
+        return ContainerExecutor(as_root, user[0], user[1], work, SystemIds())
+
+    def tools(settings: ToolSettings, blobs: BlobStore, wall: Executor) -> ToolProvider:
+        return BuiltinTools(settings, blobs, wall, clock, closed_web())
+
+    def model(config: Config) -> TrialModel:
+        http = httpx.AsyncClient()
+        client = AnthropicModel(config.model, api_key, http, clock)
+        return TrialModel(client, http.aclose)
+
+    return TrialParts(
+        clock=clock,
+        ids=SystemIds(),
+        code_revision=revision,
+        open_store=lambda folder, config: trial_store(folder, config, clock),
+        executor=executor,
+        tools=tools,
+        model=model,
+    )
+
+
+def _bench(args: argparse.Namespace) -> int:
+    settings = load_bench_settings(BENCH / "bench.toml", Path.home())
+    if isinstance(settings, Failure):
+        return _failed(settings)
+    version = harbor_version(BENCH / "harbor" / "uv.lock")
+    if isinstance(version, Failure):
+        return _failed(version)
+    return asyncio.run(bench_command(bench_parts(settings, version), args, args.config))
+
+
+def bench_parts(settings: BenchSettings, version: str) -> BenchParts:
+    """Build the bench command on Harbor, the ledger file, this checkout and terminal.
+
+    The bench folder is made here, so that the ledger and the job folders
+    have somewhere to go.
+    """
+    folder = Path(settings.dir)
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return BenchParts(
+        jobs=harbor_jobs(folder),
+        check_jobs=harbor_jobs(folder / "checks"),
+        ledger=FileLedger(folder / "ledger.jsonl"),
+        clock=SystemClock(),
+        ids=SystemIds(),
+        root=REPO_ROOT,
+        settings=settings,
+        harbor_version=version,
+        portable_id=settings_portable_id,
+        environ=os.environ,
+        user=(os.getuid(), os.getgid()),
+        out=sys.stdout,
+        errors=sys.stderr,
+    )
+
+
+def harbor_jobs(bench: Path) -> HarborJobs:
+    """Build the job runner on the pinned Harbor, with its job folders in `bench`."""
+    harbor = BENCH / "harbor"
+    return HarborJobs(
+        HarborPaths(
+            start_script=harbor / "start.sh",
+            bench=bench,
+            tasks=BENCH / "tasks",
+            compose=harbor / "no_network.yaml",
+            agent_class="harbor_shim.agent:HarnessAgent",
+            reference_class="harbor_shim.reference:ReferenceAsCommandUser",
+            environment_class="harbor_shim.environment:SharedFolderDocker",
+        )
+    )
+
+
+def settings_portable_id(config: Config) -> str:
+    """Give the portable config id of a settings file, without a trial."""
+    return portable_config_id(
+        config.model,
+        config.prices,
+        config.run,
+        tool_entries(config),
+        dataclasses.asdict(config.tools),
+    )
+
+
+async def bench_trial(request: TrialRequest) -> TrialRecord:
+    """Run one trial of the bench on the real parts. Harbor's agent class calls it.
+
+    The key is read from `ANTHROPIC_API_KEY`, as `chat` reads it.
+    """
+    parts = trial_parts(os.environ.get("ANTHROPIC_API_KEY", ""), _loaded_revision())
+    return await run_trial(parts, request)
+
+
+@functools.cache
+def _loaded_revision() -> str:
+    # Worked out at the first trial and kept: it names the code this process
+    # loaded, which a later change to the checkout does not change.
+    return code_revision(REPO_ROOT)
 
 
 async def _store_command(

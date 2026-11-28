@@ -1,0 +1,8 @@
+# Where job folders and the ledger go. Not in the repo.
+dir = "~/lamplighter-bench"
+# The PATH a command gets in a task's container.
+shell_path = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+# A run set stops starting model calls at this cost. 30 dollars.
+run_set_max_micro_dollars = 30_000_000
+# Trials at a time.
+concurrent_trials = 4

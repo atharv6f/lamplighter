@@ -79,6 +79,8 @@ async def start_run(
             v=READ_VERSION[RUN_STARTED],
             payload={
                 "config_id": spec.config_id,
+                "portable_config_id": spec.portable_config_id,
+                "code_revision": spec.code_revision,
                 "trigger": "message",
                 "wall": spec.wall,
             },

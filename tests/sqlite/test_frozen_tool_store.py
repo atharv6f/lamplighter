@@ -1,10 +1,12 @@
-"""Two frozen stores of tool calls, as the loop wrote them, must read the same now.
+"""Three frozen stores of tool calls, as the loop wrote them, must read the same now.
 
 Each holds every event the loop writes for reads and changes, and an effect
 row in each state the ledger can reach, as `tests/frozen_tool_samples.py`
 made them. The first was made before a model request saved its model and
-a failed tool its failure kind, so it is read back row for row. The second
-was made after, and is compared with what this code writes today.
+a failed tool its failure kind, and the second before a run saved its
+portable config id and its code revision, so both are read back row for
+row. The third was made after, and is compared with what this code writes
+today.
 """
 
 import json
@@ -44,6 +46,7 @@ from tests.sqlite.helpers import opened, run
 STORES = Path(__file__).parents[1] / "stores"
 FIRST = STORES / "version_2_tools.sql"
 WITH_MODEL = STORES / "version_2_tools_with_model.sql"
+WITH_REVISION = STORES / "version_2_tools_with_revision.sql"
 LIMIT = 4_194_304
 STATES = {"intended", "done", "failed", "unknown", "resolved"}
 SESSIONS = ("sess-a", "sess-b", "sess-c")
@@ -138,10 +141,28 @@ def test_the_first_frozen_tool_store_reads_back_what_its_rows_hold(
             assert field not in event.payload, (event.seq, field)
 
 
-def test_the_frozen_tool_store_with_the_model_reads_as_this_code_would_write_it(
+def test_the_frozen_tool_store_with_the_model_reads_back_what_its_rows_hold(
     tmp_path: Path,
 ) -> None:
     connection = frozen(tmp_path, WITH_MODEL)
+    log = SqliteEventLog(connection, {}, LIMIT)
+    started = 0
+    for session in SESSIONS:
+        read = run(log.read(session, 0))
+        assert not isinstance(read, Failure), read
+        assert list(read) == rows_as_events(connection, session)
+        for event in read:
+            if event.type == "run_started":
+                started += 1
+                assert "portable_config_id" not in event.payload
+                assert "code_revision" not in event.payload
+    assert started == 5
+
+
+def test_the_frozen_tool_store_with_the_revision_reads_as_this_code_would_write_it(
+    tmp_path: Path,
+) -> None:
+    connection = frozen(tmp_path, WITH_REVISION)
     expected, actions = fakes()
     from_file = run(
         everything(
@@ -154,6 +175,23 @@ def test_the_frozen_tool_store_with_the_model_reads_as_this_code_would_write_it(
     )
     assert not any(isinstance(part, Failure) for part in from_file), from_file
     assert from_file == expected
+
+
+def test_the_third_store_saves_both_ids_and_the_revision_on_each_run(
+    tmp_path: Path,
+) -> None:
+    connection = frozen(tmp_path, WITH_REVISION)
+    payloads = [
+        json.loads(row[0])
+        for row in connection.execute(
+            "SELECT payload FROM events WHERE type = 'run_started'"
+        )
+    ]
+    assert len(payloads) == 5
+    for payload in payloads:
+        assert payload["config_id"] == "c" * 64
+        assert payload["portable_config_id"] == "p" * 64
+        assert payload["code_revision"] == "unknown"
 
 
 def test_the_second_store_saves_the_model_and_the_provider_on_each_request(
@@ -172,7 +210,11 @@ def test_the_second_store_saves_the_model_and_the_provider_on_each_request(
         assert payload["provider"] == "made-up"
 
 
-@pytest.mark.parametrize("text", [FIRST, WITH_MODEL], ids=["first", "with_model"])
+@pytest.mark.parametrize(
+    "text",
+    [FIRST, WITH_MODEL, WITH_REVISION],
+    ids=["first", "with_model", "with_revision"],
+)
 def test_it_holds_every_tool_payload_and_an_effect_in_each_state(
     tmp_path: Path, text: Path
 ) -> None:

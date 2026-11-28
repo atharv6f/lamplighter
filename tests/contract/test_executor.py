@@ -11,14 +11,15 @@ import os
 import signal
 import subprocess
 import time
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Iterator
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from lamplighter.adapters import FakeExecutor, SystemClock
+from lamplighter.adapters import FakeExecutor, SystemClock, SystemIds
+from lamplighter.adapters.container import ContainerExecutor
 from lamplighter.adapters.seatbelt import SeatbeltExecutor
 from lamplighter.ports import (
     Command,
@@ -27,6 +28,7 @@ from lamplighter.ports import (
     Failure,
     canonical_json,
 )
+from tests.container_kit import RunningContainer, started_container
 from tests.direct_executor import DirectExecutor
 
 PATH = {"PATH": "/usr/bin:/bin"}
@@ -37,11 +39,40 @@ def run[T](call: Coroutine[Any, Any, T]) -> T:
     return asyncio.run(call)
 
 
+def is_alive_here(pid: int) -> bool:
+    # A process that is gone may stay a zombie for a moment, until its new
+    # parent reaps it. A zombie runs nothing. `ps` is asked, not /proc,
+    # because macOS has no /proc and a check that cannot see a process
+    # would pass there for ever.
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        state = subprocess.run(
+            ["ps", "-o", "stat=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+        if not state or state.startswith("Z"):
+            return False
+        time.sleep(0.01)
+    return True
+
+
+def kill_here(pid: int) -> None:
+    os.kill(pid, signal.SIGKILL)
+
+
 @dataclass(frozen=True)
 class ExecutorKind:
-    """How to make one executor on a work folder."""
+    """How to make one executor on a work folder, and to reach a process it started.
+
+    A process id inside a container means nothing outside it, so a kind
+    asks after its own processes and kills them.
+    """
 
     make: Callable[[Path], Executor]
+    is_alive: Callable[[int], bool] = is_alive_here
+    kill: Callable[[int], None] = kill_here
 
 
 def behind_the_wall(work: Path) -> Executor:
@@ -52,19 +83,66 @@ def behind_the_wall(work: Path) -> Executor:
     return SeatbeltExecutor(str(work), str(scratch), str(state), SystemClock())
 
 
+def in_a_container(container: RunningContainer) -> ExecutorKind:
+    """Commands in a container of the pinned image, as the user that runs the tests.
+
+    The work folder is then the command user's, as the box of a trial is.
+    """
+
+    def make(work: Path) -> Executor:
+        user, group = os.getuid(), os.getgid()
+        return ContainerExecutor(container.as_root(), user, group, work, SystemIds())
+
+    return ExecutorKind(make, container.is_alive, container.kill)
+
+
 FAKE = ExecutorKind(lambda work: FakeExecutor(work, lambda command: DONE))
 DIRECT = ExecutorKind(lambda work: DirectExecutor(work, SystemClock()))
 WALLED = ExecutorKind(behind_the_wall)
+# Its kind needs a container, which the fixture below starts once and removes.
+CONTAINED = "container"
 SANDBOX = pytest.mark.sandbox
+CONTAINER = pytest.mark.container
 RECORD_KINDS = [
     pytest.param(FAKE, id="fake"),
     pytest.param(DIRECT, id="direct"),
     pytest.param(WALLED, id="seatbelt", marks=SANDBOX),
+    pytest.param(CONTAINED, id="container", marks=CONTAINER),
 ]
 PROCESS_KINDS = [
     pytest.param(DIRECT, id="direct"),
     pytest.param(WALLED, id="seatbelt", marks=SANDBOX),
+    pytest.param(CONTAINED, id="container", marks=CONTAINER),
 ]
+WALLED_KINDS = [
+    pytest.param(WALLED, id="seatbelt", marks=SANDBOX),
+    pytest.param(CONTAINED, id="container", marks=CONTAINER),
+]
+# The kind of the test that runs now, so that `is_alive` and `kill_leftover`
+# reach the processes where it started them.
+_in_use: list[ExecutorKind] = []
+
+
+@pytest.fixture(scope="module")
+def container_kind(tmp_path_factory: pytest.TempPathFactory) -> Iterator[ExecutorKind]:
+    base = tmp_path_factory.getbasetemp()
+    with started_container(base) as container:
+        yield in_a_container(container)
+
+
+def kind_of(request: pytest.FixtureRequest) -> ExecutorKind:
+    if request.param == CONTAINED:
+        return request.getfixturevalue("container_kind")
+    return request.param
+
+
+def executor_of(request: pytest.FixtureRequest, work: Path) -> Iterator[Executor]:
+    kind = kind_of(request)
+    _in_use.append(kind)
+    try:
+        yield kind.make(work)
+    finally:
+        _in_use.remove(kind)
 
 
 @pytest.fixture
@@ -75,15 +153,18 @@ def work(tmp_path: Path) -> Path:
 
 
 @pytest.fixture(params=RECORD_KINDS)
-def any_executor(request: pytest.FixtureRequest, work: Path) -> Executor:
-    kind: ExecutorKind = request.param
-    return kind.make(work)
+def any_executor(request: pytest.FixtureRequest, work: Path) -> Iterator[Executor]:
+    yield from executor_of(request, work)
 
 
 @pytest.fixture(params=PROCESS_KINDS)
-def executor(request: pytest.FixtureRequest, work: Path) -> Executor:
-    kind: ExecutorKind = request.param
-    return kind.make(work)
+def executor(request: pytest.FixtureRequest, work: Path) -> Iterator[Executor]:
+    yield from executor_of(request, work)
+
+
+@pytest.fixture(params=WALLED_KINDS)
+def walled(request: pytest.FixtureRequest, work: Path) -> Iterator[Executor]:
+    yield from executor_of(request, work)
 
 
 def command(work: Path, *argv: str, **changes: Any) -> Command:
@@ -137,22 +218,11 @@ def open_descriptors() -> int:
 
 
 def is_alive(pid: int) -> bool:
-    # A process that is gone may stay a zombie for a moment, until its new
-    # parent reaps it. A zombie runs nothing. `ps` is asked, not /proc,
-    # because macOS has no /proc and a check that cannot see a process
-    # would pass there for ever.
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline:
-        state = subprocess.run(
-            ["ps", "-o", "stat=", "-p", str(pid)],
-            capture_output=True,
-            text=True,
-            check=False,
-        ).stdout.strip()
-        if not state or state.startswith("Z"):
-            return False
-        time.sleep(0.01)
-    return True
+    return _in_use[-1].is_alive(pid)
+
+
+def kill_leftover(pid: int) -> None:
+    _in_use[-1].kill(pid)
 
 
 # The record laws.
@@ -376,8 +446,9 @@ def test_standard_input_is_closed_even_when_the_callers_is_open(
 
 
 def test_a_program_that_cannot_start_is_unavailable(work: Path) -> None:
-    # With no wall, the runner starts the program itself. Behind the wall it
-    # starts sandbox-exec, which reports the missing program: see below.
+    # With no wall, the runner starts the program itself. Behind a wall it
+    # starts sandbox-exec or the container's script, which reports the
+    # missing program: see below.
     executor = DIRECT.make(work)
     before = open_descriptors()
     failed = run(executor.run(command(work, str(work / "no-such-program"))))
@@ -386,11 +457,10 @@ def test_a_program_that_cannot_start_is_unavailable(work: Path) -> None:
     assert open_descriptors() == before
 
 
-@pytest.mark.sandbox
 def test_behind_the_wall_a_program_that_does_not_exist_is_a_failed_result(
-    work: Path,
+    walled: Executor, work: Path
 ) -> None:
-    executor = WALLED.make(work)
+    executor = walled
     before = open_descriptors()
     ended = result_of(run(executor.run(command(work, str(work / "no-such-program")))))
     assert ended.exit_code not in (None, 0)
@@ -453,7 +523,7 @@ def test_a_cancel_after_the_command_ended_gives_its_result(
     try:
         result = result_of(run(scene()))
     finally:
-        os.kill(int((work / "pid").read_text()), signal.SIGKILL)
+        kill_leftover(int((work / "pid").read_text()))
     assert (result.exit_code, result.output) == (0, b"ended\n")
     assert not result.cancelled
 
@@ -484,7 +554,7 @@ def test_a_child_that_left_the_group_does_not_hold_the_call(
         # The known limit: a child that left the group lives on.
         assert is_alive(int((work / "pid").read_text()))
     finally:
-        os.kill(int((work / "pid").read_text()), signal.SIGKILL)
+        kill_leftover(int((work / "pid").read_text()))
     assert (result.exit_code, result.output) == (0, b"parent-done\n")
     assert took < 2
 

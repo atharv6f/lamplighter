@@ -30,6 +30,8 @@ from tests.stub_tools import StubTools
 AT = "2026-11-26T07:35:12.345Z"
 SESSION = "sess-a"
 CONFIG = "c" * 64
+PORTABLE = "p" * 64
+REVISION = "unknown"
 WALL = {"adapter": "fake"}
 PRICES = Prices(
     input_uncached=4_000_000,
@@ -39,6 +41,8 @@ PRICES = Prices(
 )
 SPEC = RunSpec(
     config_id=CONFIG,
+    portable_config_id=PORTABLE,
+    code_revision=REVISION,
     model="made-up-1",
     provider="made-up",
     system="You are a made-up helper.",

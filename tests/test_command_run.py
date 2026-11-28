@@ -11,7 +11,7 @@ from pathlib import Path
 from lamplighter.adapters import SystemClock
 from lamplighter.adapters.command_run import run_command
 from lamplighter.ports import ExecResult, Failure
-from tests.contract.test_executor import is_alive
+from tests.contract.test_executor import is_alive_here as is_alive
 from tests.fake_clock import START
 
 PATH = {"PATH": "/usr/bin:/bin"}

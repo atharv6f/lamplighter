@@ -1,4 +1,4 @@
-"""One hash over everything that changes how a run behaves."""
+"""Two hashes over the settings that shape a run: one for this machine, one for any."""
 
 import hashlib
 from collections.abc import Sequence
@@ -36,6 +36,39 @@ def config_id(
             "tools": tools,
             "tool_settings": tool_settings,
             "wall": wall,
+        }
+    )
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+# Where a config runs and not what it is: each trial of the bench has its
+# own folders, and two machines have their own command PATH.
+_PLACE_SETTINGS = ("work_dir", "scratch_dir", "shell_path")
+
+
+def portable_config_id(
+    model: ModelProfile,
+    prices: Prices,
+    run: RunSettings,
+    tools: Sequence[ToolEntry],
+    tool_settings: JsonObject,
+) -> str:
+    """Give one hash that names the same settings on any machine, as 64 hex characters.
+
+    It is `config_id` without the wall and without the two tool folders and
+    the command PATH. So one settings file gives one id on this Mac and in
+    every trial of the bench, where each trial has a work folder of its own.
+    """
+    kept = {
+        key: value for key, value in tool_settings.items() if key not in _PLACE_SETTINGS
+    }
+    text = saved_json(
+        {
+            "model": model,
+            "prices": prices,
+            "run": run,
+            "tools": tools,
+            "tool_settings": kept,
         }
     )
     return hashlib.sha256(text.encode("utf-8")).hexdigest()

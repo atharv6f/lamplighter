@@ -1,3 +1,6 @@
+from dataclasses import dataclass
+from typing import Literal
+
 import pytest
 
 from lamplighter.ports import (
@@ -13,6 +16,16 @@ from lamplighter.ports import (
     to_plain,
 )
 from tests.model_samples import REQUEST, TEXT, TOOL_CALL, TOOL_RESULT, USAGE
+
+type _Colour = Literal["red", "green"]
+type _Shape = Literal["round"]
+type _Word = _Colour | _Shape | Literal["none"]
+
+
+@dataclass(frozen=True, slots=True)
+class _Words:
+    word: _Word | None
+    words: tuple[_Word, ...]
 
 
 def _plain_object(record: object) -> dict[str, JsonValue]:
@@ -111,3 +124,14 @@ def test_a_saved_value_of_the_wrong_type_does_not_fit() -> None:
     plain["output"] = "40"
     with pytest.raises(ValueError, match="expected int"):
         from_stored(Usage, plain)
+
+
+@pytest.mark.parametrize("word", ["red", "round", "none", None])
+def test_a_union_of_sets_of_words_reads_each_of_its_words(word: _Word | None) -> None:
+    record = _Words(word=word, words=("green", "round"))
+    assert from_plain(_Words, to_plain(record)) == record
+
+
+def test_a_word_of_no_set_in_the_union_is_rejected() -> None:
+    with pytest.raises(ValueError, match="square"):
+        from_plain(_Words, {"word": "square", "words": []})

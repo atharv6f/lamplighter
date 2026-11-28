@@ -413,6 +413,7 @@ def main() -> int:
         sys.stdin.fileno(),
         sys.stdout,
         sys.stderr,
+        "unknown",
     )
     return chat(config, session, parts)
 

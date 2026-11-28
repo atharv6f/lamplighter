@@ -18,7 +18,7 @@ import pytest
 from lamplighter.adapters import CountingIds, FakeExecutor, TerminalChannel
 from lamplighter.app.chat import LEAVE_CODE, LEAVING, leave_now
 from lamplighter.ports import ExecResult
-from tests.contract.test_executor import is_alive
+from tests.contract.test_executor import is_alive_here as is_alive
 from tests.fake_clock import FakeClock
 from tests.group_kill import kill_group
 from tests.pty_terminal import SECONDS, piped

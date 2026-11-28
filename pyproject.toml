@@ -25,6 +25,10 @@ dev = [
     "trustme>=1.2.1",
 ]
 
+[tool.ruff]
+# A task's files are data for the bench, and some are broken on purpose.
+extend-exclude = ["bench/tasks"]
+
 [tool.ruff.lint]
 # E, F, UP, B, SIM and I are the set Ruff's own docs suggest as a start.
 # C90 caps how tangled one function may get. D100, D101 and D103 ask for a
@@ -45,16 +49,17 @@ typeCheckingMode = "strict"
 testpaths = ["tests"]
 # Tests marked "live" call the real API and cost money, tests marked "crash"
 # kill a process 200 times and take minutes, tests marked "sandbox" need
-# macOS's sandbox-exec, and tests marked "phoenix" start the pinned Phoenix,
-# about 700 MB once installed, so the default run leaves all four out.
-# "-m live", "-m crash", "-m sandbox" or "-m phoenix" on the command line
-# runs them.
-addopts = "-m 'not live and not crash and not sandbox and not phoenix'"
+# macOS's sandbox-exec, tests marked "phoenix" start the pinned Phoenix,
+# about 700 MB once installed, and tests marked "container" need Docker, so
+# the default run leaves all five out. "-m live", "-m crash", "-m sandbox",
+# "-m phoenix" or "-m container" on the command line runs them.
+addopts = "-m 'not live and not crash and not sandbox and not phoenix and not container'"
 markers = [
     "live: calls the real Anthropic API and needs ANTHROPIC_API_KEY",
     "crash: kills a process that writes to a real store, 200 times",
     "sandbox: runs commands behind the real wall and needs macOS's sandbox-exec",
     "phoenix: starts the pinned Phoenix through scripts/phoenix/start.sh",
+    "container: runs commands in a Docker container of the pinned image",
 ]
 
 [tool.importlinter]
@@ -82,3 +87,23 @@ forbidden_modules = ["opentelemetry", "google"]
 ignore_imports = [
     "lamplighter.adapters.phoenix.otlp -> opentelemetry",
 ]
+
+[[tool.importlinter.contracts]]
+name = "core does not import the bench"
+type = "forbidden"
+source_modules = ["lamplighter.core"]
+forbidden_modules = ["lamplighter.bench"]
+
+[[tool.importlinter.contracts]]
+name = "the bench's rules take plain values and import no other part"
+type = "forbidden"
+source_modules = ["lamplighter.bench"]
+forbidden_modules = ["lamplighter.adapters", "lamplighter.app", "lamplighter.core"]
+
+# Harbor is not installed in the harness's environment. Only the shim in
+# bench/harbor imports it.
+[[tool.importlinter.contracts]]
+name = "nothing in the harness imports Harbor"
+type = "forbidden"
+source_modules = ["lamplighter"]
+forbidden_modules = ["harbor"]

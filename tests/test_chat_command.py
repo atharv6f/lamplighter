@@ -91,6 +91,9 @@ from tests.stub_tools import StubTools
 from tests.terminal_kit import Keyboard, Screen, typed
 from tests.tooling_kit import ENDED_WELL, Answer, tooling_for, with_tool_folders
 
+# A made-up revision: a commit with a mark for uncommitted changes.
+REVISION = "5" * 40 + "+dirty.0123456789ab"
+
 SETTINGS = Path(__file__).parents[1] / "lamplighter.toml"
 CHAT_SECONDS = 20.0
 USAGE = Usage(input_uncached=100, cache_read=0, cache_write=0, output=20)
@@ -136,6 +139,7 @@ def parts_for(
         keyboard.reader,
         screen,
         errors,
+        REVISION,
     )
 
 
@@ -238,6 +242,42 @@ def test_a_new_session_is_started_and_its_id_printed(tmp_path: Path) -> None:
         "run_started",
         "run_end",
     ]
+
+
+def test_a_run_saves_the_portable_id_and_the_code_revision_it_was_given(
+    tmp_path: Path,
+) -> None:
+    code, screen, _ = chat_with(tmp_path, typed(b"Hello.\n"))
+    assert code == 0
+    session = screen.splitlines()[0].removeprefix("Session ")
+    connection = open_database(tmp_path / "store" / "state.db", 5.0)
+    assert not isinstance(connection, Failure)
+    events = asyncio.run(SqliteEventLog(connection, {}, 10_000).read(session, 0))
+    connection.close()
+    assert not isinstance(events, Failure)
+    config = config_in(tmp_path)
+    tooling = tooling_for(config, StubTools(SystemClock()))(InMemoryBlobStore(10))
+    portable = run_spec(config, tooling, REVISION).portable_config_id
+    (started,) = [e.payload for e in events if e.type == "run_started"]
+    assert started["code_revision"] == REVISION
+    assert started["portable_config_id"] == portable
+
+
+def test_the_run_spec_gives_one_portable_id_for_one_settings_file_on_two_folders(
+    tmp_path: Path,
+) -> None:
+    config = config_in(tmp_path)
+    tooling = tooling_for(config, StubTools(SystemClock()))(InMemoryBlobStore(10))
+    moved = dataclasses.replace(
+        config,
+        tools=dataclasses.replace(
+            config.tools, work_dir="/made-up/moved", scratch_dir="/made-up/other"
+        ),
+    )
+    here, there = run_spec(config, tooling, REVISION), run_spec(moved, tooling, "x")
+    assert here.portable_config_id == there.portable_config_id
+    assert here.config_id != there.config_id
+    assert (here.code_revision, there.code_revision) == (REVISION, "x")
 
 
 def test_a_session_given_by_id_is_carried_on_with_no_session_line(
@@ -507,7 +547,7 @@ def test_the_run_spec_carries_the_wall_and_its_id_covers_all_six(
 ) -> None:
     config = config_in(tmp_path)
     tooling = tooling_for(config, StubTools(SystemClock()))(InMemoryBlobStore(10))
-    spec = run_spec(config, tooling)
+    spec = run_spec(config, tooling, REVISION)
     assert spec.wall == {"adapter": "fake"}
     assert spec.config_id == config_id(
         config.model,
@@ -520,7 +560,7 @@ def test_the_run_spec_carries_the_wall_and_its_id_covers_all_six(
     moved = dataclasses.replace(
         config, tools=dataclasses.replace(config.tools, work_dir="/made-up/moved")
     )
-    assert run_spec(moved, tooling).config_id != spec.config_id
+    assert run_spec(moved, tooling, REVISION).config_id != spec.config_id
 
 
 def test_the_run_spec_names_the_model_and_the_adapter_from_the_settings(
@@ -528,7 +568,7 @@ def test_the_run_spec_names_the_model_and_the_adapter_from_the_settings(
 ) -> None:
     config = config_in(tmp_path)
     tooling = tooling_for(config, StubTools(SystemClock()))(InMemoryBlobStore(10))
-    spec = run_spec(config, tooling)
+    spec = run_spec(config, tooling, REVISION)
     assert (spec.model, spec.provider) == (config.model.model, config.model.adapter)
     assert (spec.model, spec.provider) == ("made-up-1", "scripted")
 
@@ -565,6 +605,7 @@ def test_the_chat_starts_on_the_real_tools_before_their_folders_exist(
         keyboard.reader,
         screen,
         errors,
+        REVISION,
     )
     try:
         code = chat(config, None, parts)
@@ -604,6 +645,7 @@ def test_a_tool_whose_schema_the_check_cannot_read_stops_the_start(
             keyboard.reader,
             screen,
             io.StringIO(),
+            REVISION,
         )
         with pytest.raises(ValueError, match="the schema of listed: names.items$"):
             chat(config, None, parts)
