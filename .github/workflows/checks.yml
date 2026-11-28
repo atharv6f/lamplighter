@@ -44,3 +44,6 @@ jobs:
       - run: uv sync --locked
       - run: uv run pytest -q -m container
       - run: uv run --project bench/harbor --frozen pyright -p bench/harbor
+      # With Docker and no model: the reference solution passes every task
+      # three times out of three, and doing nothing fails every task.
+      - run: uv run lamplighter bench check

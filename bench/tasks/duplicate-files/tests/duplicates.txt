@@ -1,0 +1,3 @@
+photos/2025/hills.jpg photos/shared/hills.jpg
+photos/2026/beach.jpg photos/backup/beach-copy.jpg
+photos/2026/cat.jpg photos/backup/cat.jpg photos/shared/cat-1.jpg

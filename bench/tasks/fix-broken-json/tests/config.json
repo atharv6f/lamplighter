@@ -1,0 +1,14 @@
+{
+  "name": "made-up-shop",
+  "version": "2.4.1",
+  "owner": "Mira Okafor",
+  "regions": [
+    "north",
+    "west"
+  ],
+  "limits": {
+    "orders_per_minute": 120,
+    "basket_items": 50
+  },
+  "notes": "Prices in euros, with VAT."
+}
