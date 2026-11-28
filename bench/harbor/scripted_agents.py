@@ -167,14 +167,17 @@ class LeavesALargeFile(HarnessAgent):
 
 
 class ListsTheNetwork(HarnessAgent):
-    """Lists the network interfaces, tries a connection out, then fixes the line."""
+    """Lists the interfaces that are up, tries a connection out, then fixes the line."""
 
+    # Up is the lowest bit of an interface's flags. Docker Desktop's kernel
+    # shows its fallback tunnel devices in every container, all of them down.
     trial = staticmethod(
         scripted(
             _shell(
                 "n",
-                "ls /sys/class/net; (exec 3<>/dev/tcp/192.0.2.1/80) 2>&1;"
-                " echo connected=$?",
+                "for d in /sys/class/net/*/; do n=${d%/};"
+                ' [ $(( $(cat "$d/flags") & 1 )) = 1 ] && echo "up ${n##*/}"; done;'
+                " (exec 3<>/dev/tcp/192.0.2.1/80) 2>&1; echo connected=$?",
             ),
             _calls(_FIX),
             _DONE,
