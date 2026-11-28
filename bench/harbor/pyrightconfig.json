@@ -1,0 +1,6 @@
+{
+  // Standard mode, not strict: Harbor ships no type marker, so strict mode
+  // reports each import of it as a stub that is not found.
+  "include": ["harbor_shim", "scripted_agents.py"],
+  "typeCheckingMode": "standard"
+}

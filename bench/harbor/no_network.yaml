@@ -1,0 +1,6 @@
+# Added to the agent's container by the job file: no network interface but
+# lo, and a first process that collects dead ones.
+services:
+  main:
+    network_mode: none
+    init: true

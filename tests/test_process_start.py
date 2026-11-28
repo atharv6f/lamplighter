@@ -17,7 +17,11 @@ STARTS = {"subprocess", "multiprocessing", "pty"}
 # Files that start a fixed program of their own and never a tool's command.
 # Each start there must name its program as a word in the code itself, so
 # no command the model wrote can reach it.
-FIXED_PROGRAMS = {"app/code_revision.py": {"git"}}
+FIXED_PROGRAMS = {
+    "app/code_revision.py": {"git"},
+    "adapters/harbor_jobs/leftovers.py": {"docker"},
+    "adapters/harbor_jobs/runner.py": {"/bin/sh"},
+}
 OS_STARTS = {"fork", "forkpty", "posix_spawn", "posix_spawnp", "system", "popen"}
 
 

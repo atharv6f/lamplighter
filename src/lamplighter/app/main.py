@@ -2,10 +2,13 @@
 
 import argparse
 import asyncio
+import dataclasses
+import functools
 import os
 import re
 import sqlite3
 import sys
+import tempfile
 from collections.abc import Callable, Sequence
 from datetime import date
 from pathlib import Path
@@ -14,6 +17,7 @@ from typing import TextIO
 import httpx
 
 from lamplighter.adapters import (
+    FakeExecutor,
     FileBlobStore,
     FileTraceCursor,
     SystemClock,
@@ -28,6 +32,7 @@ from lamplighter.adapters.builtin_tools import (
     system_web,
 )
 from lamplighter.adapters.container import AsRoot, ContainerExecutor
+from lamplighter.adapters.in_memory import InMemoryBlobStore
 from lamplighter.adapters.phoenix import PhoenixSink, local_address
 from lamplighter.adapters.seatbelt import SeatbeltExecutor
 from lamplighter.adapters.sqlite import (
@@ -41,19 +46,28 @@ from lamplighter.adapters.sqlite import (
     open_database,
     store_sizes,
 )
-from lamplighter.app.bench_trial import TrialModel, TrialParts, TrialStore
+from lamplighter.app.bench_trial import (
+    TrialModel,
+    TrialParts,
+    TrialRequest,
+    TrialStore,
+    run_trial,
+)
 from lamplighter.app.chat import OFF_THIS_MAC, ChatParts, Stores, Tooling, chat
 from lamplighter.app.code_revision import REPO_ROOT, code_revision
 from lamplighter.app.config import Config, load_config
 from lamplighter.app.report import day_lines
 from lamplighter.app.traces import export_spans, reset_cursor
+from lamplighter.bench import TrialRecord
 from lamplighter.core import SPAN_LAYOUT
 from lamplighter.ports import (
     BlobStore,
     Clock,
+    Command,
     Executor,
     Failure,
     ModelClient,
+    ToolEntry,
     ToolProvider,
     TraceCursor,
     TraceSink,
@@ -200,6 +214,24 @@ def builtin_tooling(config: Config, clock: Clock) -> Callable[[BlobStore], Tooli
     return build
 
 
+def tool_entries(config: Config) -> tuple[ToolEntry, ...]:
+    """List the built-in tools the settings give, without a wall or a store.
+
+    The tools are built on a fake executor, an empty folder and blobs in
+    memory, only to be listed: the list does not depend on any of them.
+    """
+    with tempfile.TemporaryDirectory() as folder:
+        settings = dataclasses.replace(config.tools, work_dir=folder)
+        blobs = InMemoryBlobStore(config.store.max_blob_bytes)
+        executor = FakeExecutor(Path(folder), _no_command)
+        built = BuiltinTools(settings, blobs, executor, SystemClock(), closed_web())
+        return built.list_tools()
+
+
+def _no_command(command: Command) -> Failure:
+    return Failure("fatal", "none", "Only listed, never run.", "tool_entries")
+
+
 def chat_parts(
     config: Config,
     model: ModelClient,
@@ -314,6 +346,22 @@ def trial_parts(api_key: str, revision: str) -> TrialParts:
         tools=tools,
         model=model,
     )
+
+
+async def bench_trial(request: TrialRequest) -> TrialRecord:
+    """Run one trial of the bench on the real parts. Harbor's agent class calls it.
+
+    The key is read from `ANTHROPIC_API_KEY`, as `chat` reads it.
+    """
+    parts = trial_parts(os.environ.get("ANTHROPIC_API_KEY", ""), _loaded_revision())
+    return await run_trial(parts, request)
+
+
+@functools.cache
+def _loaded_revision() -> str:
+    # Worked out at the first trial and kept: it names the code this process
+    # loaded, which a later change to the checkout does not change.
+    return code_revision(REPO_ROOT)
 
 
 async def _store_command(
