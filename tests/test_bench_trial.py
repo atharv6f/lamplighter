@@ -343,6 +343,22 @@ def test_a_run_set_at_its_budget_makes_no_model_call(tmp_path: Path) -> None:
     assert record.portable_config_id is None and record.micro_dollars == 0
 
 
+def test_a_store_that_does_not_open_is_infra_with_its_reason_kept(
+    tmp_path: Path,
+) -> None:
+    trial = Trial(tmp_path)
+    old = Failure("needs_user", "none", "SQLite 3.45.1 is older than 3.51.3.", "db")
+
+    def open_store(folder: Path, config: Config) -> TrialStore | Failure:
+        return old
+
+    parts = dataclasses.replace(trial.parts(playing(DONE)), open_store=open_store)
+    record = asyncio.run(run_trial(parts, trial.request()))
+    assert (record.gradable, record.infra_reason) == (False, "harness_failure")
+    assert record.run_detail == old.message
+    assert trial.saved() == record
+
+
 def test_a_settings_copy_that_is_not_the_planned_config_makes_no_model_call(
     tmp_path: Path,
 ) -> None:

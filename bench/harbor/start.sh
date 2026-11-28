@@ -24,9 +24,13 @@ docker_context=""
 if [ -n "${DOCKER_CONTEXT-}" ]; then docker_context="DOCKER_CONTEXT=$DOCKER_CONTEXT"; fi
 python=""
 if [ -n "${UV_PYTHON-}" ]; then python="UV_PYTHON=$UV_PYTHON"; fi
+# Where uv keeps the Pythons it installed. Without it, uv may build Harbor's
+# environment on another Python on PATH, whose SQLite the harness cannot use.
+pythons=""
+if [ -n "${UV_PYTHON_INSTALL_DIR-}" ]; then pythons="UV_PYTHON_INSTALL_DIR=$UV_PYTHON_INSTALL_DIR"; fi
 exec $awake env -i \
   PATH="$PATH" HOME="$HOME" \
-  ${key:+"$key"} ${docker_host:+"$docker_host"} ${docker_context:+"$docker_context"} ${python:+"$python"} \
+  ${key:+"$key"} ${docker_host:+"$docker_host"} ${docker_context:+"$docker_context"} ${python:+"$python"} ${pythons:+"$pythons"} \
   HARBOR_TELEMETRY=0 \
   LITELLM_LOCAL_MODEL_COST_MAP=True \
   PYTHONPATH="$here" \

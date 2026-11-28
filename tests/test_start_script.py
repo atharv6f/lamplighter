@@ -50,6 +50,8 @@ def test_harbor_gets_the_named_variables_and_no_others(tmp_path: Path) -> None:
             "DOCKER_HOST": "unix:///made-up/docker.sock",
             "MADE_UP_SECRET": "not-for-harbor",
             "UV_INDEX_URL": "https://made-up.invalid/simple",
+            "UV_PYTHON": "3.13",
+            "UV_PYTHON_INSTALL_DIR": "/made-up/pythons",
         },
     )
     assert done.returncode == 0, done.stderr
@@ -60,6 +62,8 @@ def test_harbor_gets_the_named_variables_and_no_others(tmp_path: Path) -> None:
     assert env["HARBOR_TELEMETRY"] == "0"
     assert env["LITELLM_LOCAL_MODEL_COST_MAP"] == "True"
     assert env["PYTHONPATH"] == os.path.realpath(SCRIPT.parent)
+    assert env["UV_PYTHON"] == "3.13"
+    assert env["UV_PYTHON_INSTALL_DIR"] == "/made-up/pythons"
     assert "MADE_UP_SECRET" not in env
     assert "UV_INDEX_URL" not in env
     assert "DOCKER_CONTEXT" not in env

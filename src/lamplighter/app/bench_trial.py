@@ -137,9 +137,9 @@ async def run_trial(parts: TrialParts, request: TrialRequest) -> TrialRecord:
         return _written(harness, _stopped(parts, config, None, "budget_reached", began))
     store = parts.open_store(harness / "store", config)
     if isinstance(store, Failure):
-        return _written(
-            harness, _stopped(parts, config, None, "harness_failure", began)
-        )
+        # The store's own words, so that a person can see why no run began.
+        stopped = _stopped(parts, config, None, "harness_failure", began)
+        return _written(harness, dataclasses.replace(stopped, run_detail=store.message))
     try:
         built = _build(parts, request, config, store)
         try:
