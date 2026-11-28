@@ -21,7 +21,13 @@ from lamplighter.adapters import (
     TerminalChannel,
 )
 from lamplighter.adapters.anthropic import AnthropicModel
-from lamplighter.adapters.builtin_tools import BuiltinTools, system_web
+from lamplighter.adapters.builtin_tools import (
+    BuiltinTools,
+    ToolSettings,
+    closed_web,
+    system_web,
+)
+from lamplighter.adapters.container import AsRoot, ContainerExecutor
 from lamplighter.adapters.phoenix import PhoenixSink, local_address
 from lamplighter.adapters.seatbelt import SeatbeltExecutor
 from lamplighter.adapters.sqlite import (
@@ -35,6 +41,7 @@ from lamplighter.adapters.sqlite import (
     open_database,
     store_sizes,
 )
+from lamplighter.app.bench_trial import TrialModel, TrialParts, TrialStore
 from lamplighter.app.chat import OFF_THIS_MAC, ChatParts, Stores, Tooling, chat
 from lamplighter.app.code_revision import REPO_ROOT, code_revision
 from lamplighter.app.config import Config, load_config
@@ -44,8 +51,10 @@ from lamplighter.core import SPAN_LAYOUT
 from lamplighter.ports import (
     BlobStore,
     Clock,
+    Executor,
     Failure,
     ModelClient,
+    ToolProvider,
     TraceCursor,
     TraceSink,
     canonical_json,
@@ -236,6 +245,16 @@ def sqlite_stores(folder: Path, config: Config, clock: Clock) -> Stores | Failur
     connection = open_database(folder / "state.db", STORE_TIMEOUT_S)
     if isinstance(connection, Failure):
         return connection
+    return stores_on(connection, folder, config, clock)
+
+
+def stores_on(
+    connection: sqlite3.Connection, folder: Path, config: Config, clock: Clock
+) -> Stores:
+    """Build the stores on an open store file, with the blob folder in `folder`.
+
+    Closing the stores closes the connection.
+    """
     max_record_bytes = config.store.max_record_bytes
     return Stores(
         log=SqliteEventLog(connection, {}, max_record_bytes),
@@ -244,6 +263,56 @@ def sqlite_stores(folder: Path, config: Config, clock: Clock) -> Stores | Failur
         ledger=SqliteEffectLedger(connection, clock, max_record_bytes),
         blobs=FileBlobStore(folder / "blobs", clock, config.store.max_blob_bytes),
         close=connection.close,
+    )
+
+
+def trial_store(folder: Path, config: Config, clock: Clock) -> TrialStore | Failure:
+    """Open a new store for one trial in `folder`, and say how to export its session.
+
+    The trial holds the connection, because the export reads it.
+    """
+    folder.mkdir(mode=0o700)
+    connection = open_database(folder / "state.db", STORE_TIMEOUT_S)
+    if isinstance(connection, Failure):
+        return connection
+    stores = stores_on(connection, folder, config, clock)
+
+    async def export(session_id: str, into: Path) -> int | Failure:
+        made = await export_session(connection, stores.blobs, session_id, into, clock)
+        return made if isinstance(made, Failure) else made.events
+
+    return TrialStore(stores, export)
+
+
+def trial_parts(api_key: str, revision: str) -> TrialParts:
+    """Build the parts of a trial on the real stores, the container and the model.
+
+    Web access is closed in a trial: every fetch gets the tool's own result
+    for a name that cannot be found.
+    """
+    clock = SystemClock()
+
+    def executor(
+        as_root: AsRoot, user: tuple[int, int], work: Path
+    ) -> ContainerExecutor:
+        return ContainerExecutor(as_root, user[0], user[1], work, SystemIds())
+
+    def tools(settings: ToolSettings, blobs: BlobStore, wall: Executor) -> ToolProvider:
+        return BuiltinTools(settings, blobs, wall, clock, closed_web())
+
+    def model(config: Config) -> TrialModel:
+        http = httpx.AsyncClient()
+        client = AnthropicModel(config.model, api_key, http, clock)
+        return TrialModel(client, http.aclose)
+
+    return TrialParts(
+        clock=clock,
+        ids=SystemIds(),
+        code_revision=revision,
+        open_store=lambda folder, config: trial_store(folder, config, clock),
+        executor=executor,
+        tools=tools,
+        model=model,
     )
 
 

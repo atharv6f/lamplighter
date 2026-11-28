@@ -32,8 +32,10 @@ from lamplighter.core.run_deps import Deps
 from lamplighter.core.run_ending import TurnEnd
 from lamplighter.core.run_spans import SPAN_LAYOUT
 from lamplighter.core.run_spec import RunSettings, RunSpec
+from lamplighter.core.run_summary import RunSummary, run_summary
 from lamplighter.core.run_turn import run_turn
 from lamplighter.core.running_sessions import RunningSessions
+from lamplighter.core.saved_facts import TokenCounts
 from lamplighter.core.trace_projector import PassDone, TraceProjector
 from lamplighter.core.transcript import rebuild_messages
 
@@ -72,6 +74,9 @@ __all__ = [
     "harness_texts",
     "pass_to_the_end",
     "portable_config_id",
+    "run_summary",
+    "RunSummary",
+    "TokenCounts",
     "project_while_open",
     "rebuild_messages",
     "run_intake",
