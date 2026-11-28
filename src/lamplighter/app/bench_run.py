@@ -29,6 +29,8 @@ from lamplighter.app.bench_parts import (
 from lamplighter.app.config import Config
 from lamplighter.bench import (
     HARNESS,
+    ConfigLadder,
+    ConfigModel,
     GateDecision,
     NotWhole,
     RunSet,
@@ -56,6 +58,7 @@ from lamplighter.ports import (
     StartRow,
     TrialFacts,
     from_plain,
+    from_stored,
     held_out_uses,
     to_plain,
     utc_text,
@@ -196,6 +199,8 @@ def _loose_job(
         tasks=chosen.tasks,
         model=model.model,
         provider=model.adapter,
+        models=(),
+        ladders=(),
     )
     attempts = chosen.trials_per_task
     if harness != HARNESS:
@@ -208,7 +213,12 @@ def _loose_job(
         return copy
     if copy.sha256 != settings.sha256:
         return f"The run set {name} was started with other settings, in {copy.path}."
-    planned = dataclasses.replace(planned, portable_config_id=copy.portable_id)
+    planned = dataclasses.replace(
+        planned,
+        portable_config_id=copy.portable_id,
+        models=_models(copy.config),
+        ladders=_ladders(copy.config),
+    )
     return _harness_job(parts, name, chosen.tasks, attempts, copy, revision), planned
 
 
@@ -276,6 +286,8 @@ async def _side(parts: BenchParts, plan: PlanRow, side: Side, revision: str) -> 
         tasks=plan.body.tasks,
         model=copy.config.default_model().profile.model,
         provider=copy.config.default_model().profile.adapter,
+        models=_models(copy.config),
+        ladders=_ladders(copy.config),
     )
     attempts = plan.body.trials_per_task
     job = _harness_job(parts, name, plan.body.tasks, attempts, copy, revision)
@@ -382,7 +394,7 @@ def _decision(rows: list[LedgerRow], plan: PlanRow) -> GateDecision | Failure:
     # The run sets are read back from the ledger, so what is compared is
     # exactly what was recorded.
     sides = {
-        r.body.side: from_plain(RunSet, r.body.run_set)
+        r.body.side: from_stored(RunSet, r.body.run_set)
         for r in rows
         if isinstance(r, RunSetRow) and r.experiment == plan.experiment
     }
@@ -427,6 +439,14 @@ def _harness_job(
         run_as=parts.user,
     )
     return Job(name, tasks, attempts, _pace(parts, copy.config), False, agent)
+
+
+def _models(config: Config) -> tuple[ConfigModel, ...]:
+    return tuple(ConfigModel(e.name, e.profile.model) for e in config.models)
+
+
+def _ladders(config: Config) -> tuple[ConfigLadder, ...]:
+    return tuple(ConfigLadder(route.id, route.models) for route in config.routes)
 
 
 def _pace(parts: BenchParts, config: Config) -> int:

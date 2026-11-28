@@ -1,6 +1,7 @@
 """`bench tasks`, `check`, `plan`, `ledger` and `show` on the two fakes."""
 
 import asyncio
+import dataclasses
 import json
 import tomllib
 from pathlib import Path
@@ -15,12 +16,19 @@ from lamplighter.app.bench_commands import (
     show_ledger,
     show_trial,
 )
+from lamplighter.app.bench_lines import ledger_line, run_set_line
 from lamplighter.app.bench_parts import AS_ROOT, NO_CHECKOUT, NOT_CLEAN
 from lamplighter.app.bench_run import run_experiment, run_loose
 from lamplighter.app.bench_show import MOST_RESULT_CHARS
 from lamplighter.app.main import main
 from lamplighter.app.task_files import task_files
-from lamplighter.bench import HARNESS, GateRule, rule_hash, task_set_hash
+from lamplighter.bench import (
+    HARNESS,
+    ConfigLadder,
+    GateRule,
+    rule_hash,
+    task_set_hash,
+)
 from lamplighter.ports import (
     CheckEnd,
     CorrectionRow,
@@ -29,9 +37,11 @@ from lamplighter.ports import (
     PlanRow,
     ReferenceAgentSpec,
     RunnerAgentSpec,
+    RunSetRow,
     SplitName,
     row_text,
 )
+from tests.bench.test_run_set import PLAN, built_run_set, whole_trials
 from tests.bench_kit import HARBOR_VERSION, RULE, USER, Bench, git
 from tests.ledger_kit import bakeoff_candidate, bakeoff_rule
 from tests.test_bench_trial import quick_settings
@@ -230,7 +240,36 @@ def test_the_ledger_prints_one_line_per_row(bench: Bench) -> None:
         "run_set",
         "decision",
     ]
-    assert lines[2].endswith("6 passed, 0 failed, 0 infra, of 6 trials")
+    assert lines[2].endswith(
+        "6 passed, 0 failed, 0 infra, of 6 trials; ladders default frontier;"
+        " 0 escalated"
+    )
+
+
+def test_a_run_set_row_kept_before_its_ladders_prints_without_them(
+    bench: Bench,
+) -> None:
+    _plan(bench)
+    asyncio.run(run_experiment(bench.parts(), NAME))
+    row = next(r for r in bench.rows() if isinstance(r, RunSetRow))
+    old = dict(row.body.run_set)
+    del old["models"], old["ladders"]
+    kept = dataclasses.replace(row, body=dataclasses.replace(row.body, run_set=old))
+    assert ledger_line(kept).endswith("6 passed, 0 failed, 0 infra, of 6 trials")
+
+
+def test_the_run_set_line_names_each_ladder_and_counts_the_escalations() -> None:
+    found = built_run_set(PLAN, whole_trials())
+    moved = dataclasses.replace(found.trials[0], escalated=True)
+    found = dataclasses.replace(
+        found,
+        trials=(moved, *found.trials[1:]),
+        ladders=(*found.ladders, ConfigLadder("private", ("local",))),
+    )
+    assert run_set_line(found) == (
+        "made-up-run: 6 passed, 0 failed, 0 infra, of 6 trials;"
+        " ladders default local then frontier, private local; 1 escalated"
+    )
 
 
 def test_a_bake_off_row_is_printed_with_its_stage_and_candidate(bench: Bench) -> None:

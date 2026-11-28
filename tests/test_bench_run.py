@@ -18,7 +18,14 @@ from lamplighter.app.bench_parts import (
     NOT_CLEAN,
 )
 from lamplighter.app.bench_run import STALE_PLAN, run_experiment, run_loose
-from lamplighter.bench import HARNESS, GateDecision, RunSet, Tokens
+from lamplighter.bench import (
+    HARNESS,
+    ConfigLadder,
+    ConfigModel,
+    GateDecision,
+    RunSet,
+    Tokens,
+)
 from lamplighter.ports import (
     DecisionRow,
     Failure,
@@ -513,6 +520,7 @@ def test_a_baseline_harness_runs_with_a_network_and_names_no_config(
     assert row.config_ids == ()
     found = from_plain(RunSet, row.body.run_set)
     assert (found.harness, found.portable_config_id) == ("terminus-2", "")
+    assert (found.models, found.ladders) == ((), ())
     assert found.trials[0].tokens == Tokens(0, 0, 0, 0)
 
 
@@ -584,3 +592,68 @@ def test_an_experiment_side_runs_at_its_own_settings_pace(bench: Bench) -> None:
     assert _experiment(bench) == 0
     paces = [job.concurrent_trials for job in bench.jobs.jobs]
     assert paces == [4, 1]
+
+
+def test_a_run_set_row_names_the_models_and_ladders_of_its_settings(
+    bench: Bench,
+) -> None:
+    bench.baseline.write_text(_local_of_two())
+    assert _loose(bench) == 0
+    found = from_plain(RunSet, _run_set_rows(bench)[0].body.run_set)
+    assert found.models == (
+        ConfigModel("frontier", "claude-opus-5-5"),
+        ConfigModel("local", "local"),
+    )
+    assert found.ladders == (
+        ConfigLadder("private", ("local",)),
+        ConfigLadder("default", ("frontier",)),
+    )
+
+
+def test_each_side_names_the_ladders_of_its_own_settings(bench: Bench) -> None:
+    bench.candidate.write_text(_local_of_two())
+    assert _plan(bench) == 0
+    assert _experiment(bench) == 0
+    ladders = [
+        from_plain(RunSet, row.body.run_set).ladders for row in _run_set_rows(bench)
+    ]
+    assert ladders == [
+        (ConfigLadder("default", ("frontier",)),),
+        (
+            ConfigLadder("private", ("local",)),
+            ConfigLadder("default", ("frontier",)),
+        ),
+    ]
+
+
+class _OlderLedger:
+    """Gives back each run set as code from before the ladders wrote it."""
+
+    def __init__(self, bench: Bench) -> None:
+        self._bench = bench
+
+    async def append(self, row: LedgerRow) -> Failure | None:
+        return await self._bench.ledger.append(row)
+
+    async def rows(self) -> Sequence[LedgerRow] | Failure:
+        found = await self._bench.ledger.rows()
+        assert not isinstance(found, Failure)
+        return [_older(row) for row in found]
+
+
+def _older(row: LedgerRow) -> LedgerRow:
+    if not isinstance(row, RunSetRow):
+        return row
+    kept = {
+        name: value
+        for name, value in row.body.run_set.items()
+        if name not in ("models", "ladders")
+    }
+    return dataclasses.replace(row, body=dataclasses.replace(row.body, run_set=kept))
+
+
+def test_a_decision_reads_run_sets_kept_before_their_ladders(bench: Bench) -> None:
+    assert _plan(bench) == 0
+    parts = dataclasses.replace(bench.parts(), ledger=_OlderLedger(bench))
+    assert asyncio.run(run_experiment(parts, NAME)) == 0
+    assert bench.kinds() == WHOLE

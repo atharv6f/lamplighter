@@ -45,6 +45,8 @@ from lamplighter.bench.outcome import (
 )
 from lamplighter.bench.run_set import (
     HARNESS,
+    ConfigLadder,
+    ConfigModel,
     NotWhole,
     RunSet,
     RunSetPlan,
@@ -116,6 +118,8 @@ __all__ = [
     "NotWhole",
     "OutcomeKind",
     "OutcomeReason",
+    "ConfigLadder",
+    "ConfigModel",
     "RunSet",
     "RunSetPlan",
     "TaskCount",
