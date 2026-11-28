@@ -78,27 +78,7 @@ class HarnessAgent(BaseAgent):
 
     async def setup(self, environment: BaseEnvironment) -> None:
         """Seed the box from /app, put a link in its place, and give the box away."""
-        box = shlex.quote(str(box_of(environment.trial_paths.trial_dir)))
-        user, group = self._user
-        lines = [
-            # Harbor starts a command in the image's work folder. The copy
-            # runs only from /app: from / it would copy the container's /proc.
-            f'home=$(pwd -P) && [ "$home" = /app ]'
-            f' && cp -R -P --preserve=mode,timestamps "$home"/. {box}/work/'
-            f' && cd / && rm -rf "$home" && ln -s {box}/work "$home"',
-            # -h changes a link and never the file it points at.
-            f"chown -R -h {user}:{group} {box}",
-            f"getent passwd {user} >/dev/null"
-            f' || echo "bench:x:{user}:{group}::/nonexistent:/bin/bash" >>/etc/passwd',
-        ]
-        for line in lines:
-            try:
-                seeded = await environment.exec(line, timeout_sec=_SEED_SECONDS, user=0)
-            except RuntimeError as error:
-                # Harbor's way of saying the call did not end in time.
-                raise TrialInfraError(f"seeding: {error}") from None
-            if seeded.return_code != 0:
-                raise TrialInfraError(f"seeding ended with {seeded.return_code}")
+        await seed_box(environment, self._user)
 
     async def run(
         self, instruction: str, environment: BaseEnvironment, context: AgentContext
@@ -133,6 +113,36 @@ class HarnessAgent(BaseAgent):
         if stop is not None:
             await _empty_app(environment)
             raise TrialInfraError(stop)
+
+
+async def seed_box(
+    environment: BaseEnvironment, user_and_group: tuple[int, int]
+) -> None:
+    """Seed the box from /app, put a link in its place, and give the box away.
+
+    Raises TrialInfraError when a step fails or does not end in time.
+    """
+    box = shlex.quote(str(box_of(environment.trial_paths.trial_dir)))
+    user, group = user_and_group
+    lines = [
+        # Harbor starts a command in the image's work folder. The copy
+        # runs only from /app: from / it would copy the container's /proc.
+        f'home=$(pwd -P) && [ "$home" = /app ]'
+        f' && cp -R -P --preserve=mode,timestamps "$home"/. {box}/work/'
+        f' && cd / && rm -rf "$home" && ln -s {box}/work "$home"',
+        # -h changes a link and never the file it points at.
+        f"chown -R -h {user}:{group} {box}",
+        f"getent passwd {user} >/dev/null"
+        f' || echo "bench:x:{user}:{group}::/nonexistent:/bin/bash" >>/etc/passwd',
+    ]
+    for line in lines:
+        try:
+            seeded = await environment.exec(line, timeout_sec=_SEED_SECONDS, user=0)
+        except RuntimeError as error:
+            # Harbor's way of saying the call did not end in time.
+            raise TrialInfraError(f"seeding: {error}") from None
+        if seeded.return_code != 0:
+            raise TrialInfraError(f"seeding ended with {seeded.return_code}")
 
 
 async def _empty_app(environment: BaseEnvironment) -> None:

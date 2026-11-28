@@ -11,6 +11,7 @@ from pathlib import Path
 
 from lamplighter.app.bench_lines import ledger_line, noise_floor_line
 from lamplighter.app.bench_parts import (
+    AS_ROOT,
     BenchParts,
     LoadedSettings,
     ledger_rows,
@@ -30,6 +31,7 @@ from lamplighter.bench import (
     rule_hash,
 )
 from lamplighter.ports import (
+    AgentSpec,
     CorrectionBody,
     CorrectionRow,
     DecisionRow,
@@ -38,6 +40,7 @@ from lamplighter.ports import (
     LedgerRow,
     PlanBody,
     PlanRow,
+    ReferenceAgentSpec,
     RunnerAgentSpec,
     RunSetRow,
     SettingsFile,
@@ -220,10 +223,14 @@ async def correct_row(parts: BenchParts, row_id: str, note: str) -> int:
 async def check_tasks(parts: BenchParts) -> int:
     """Run the reference solution 3 times and nothing once on every task.
 
-    Each run has job folders of its own, named with a new id, so an old
-    result is never read as a new one. No model sees a task, so no row is
-    written and it is not a use of the held-out set.
+    The reference solution runs as this process's user, as a trial's
+    commands do, so a task that only root could do breaks the rule. Each
+    run has job folders of its own, named with a new id, so an old result
+    is never read as a new one. No model sees a task, so no row is written
+    and it is not a use of the held-out set.
     """
+    if parts.user[0] == 0:
+        return parts.refuse(AS_ROOT)
     view = task_view(parts.root)
     if isinstance(view, Failure):
         return parts.refuse(view.message)
@@ -232,10 +239,13 @@ async def check_tasks(parts: BenchParts) -> int:
         return parts.refuse("There is no task to check.")
     stamp = parts.ids.new_id()
     found: list[Sequence[TrialFacts]] = []
-    for agent, attempts in (("oracle", ORACLE_ATTEMPTS), ("nop", 1)):
-        spec = RunnerAgentSpec("runner", agent, None, {})
+    runs: tuple[tuple[str, AgentSpec, int], ...] = (
+        ("reference", ReferenceAgentSpec("reference", parts.user), ORACLE_ATTEMPTS),
+        ("nop", RunnerAgentSpec("runner", "nop", None, {}), 1),
+    )
+    for name, spec, attempts in runs:
         pace = parts.settings.concurrent_trials
-        job = Job(f"{stamp}-{agent}", tasks, attempts, pace, False, spec)
+        job = Job(f"{stamp}-{name}", tasks, attempts, pace, False, spec)
         failed = await parts.check_jobs.run(job)
         if failed is not None:
             return parts.refuse(failed.message)

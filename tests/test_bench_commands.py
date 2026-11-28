@@ -15,7 +15,7 @@ from lamplighter.app.bench_commands import (
     show_ledger,
     show_trial,
 )
-from lamplighter.app.bench_parts import NO_CHECKOUT, NOT_CLEAN
+from lamplighter.app.bench_parts import AS_ROOT, NO_CHECKOUT, NOT_CLEAN
 from lamplighter.app.bench_run import run_experiment, run_loose
 from lamplighter.app.bench_show import MOST_RESULT_CHARS
 from lamplighter.app.main import main
@@ -27,11 +27,12 @@ from lamplighter.ports import (
     Job,
     JsonValue,
     PlanRow,
+    ReferenceAgentSpec,
     RunnerAgentSpec,
     SplitName,
     row_text,
 )
-from tests.bench_kit import HARBOR_VERSION, RULE, Bench, git
+from tests.bench_kit import HARBOR_VERSION, RULE, USER, Bench, git
 from tests.test_bench_trial import quick_settings
 
 NAME = "made-up"
@@ -260,16 +261,17 @@ def test_a_correction_is_a_row_about_another(bench: Bench) -> None:
 # `bench check`.
 
 
-def test_check_runs_the_oracle_three_times_and_nothing_once_on_every_task(
+def test_check_runs_the_reference_three_times_and_nothing_once_on_every_task(
     bench: Bench,
 ) -> None:
     assert asyncio.run(check_tasks(bench.parts())) == 0
-    oracle, nop = bench.check_jobs.jobs
-    assert oracle.agent == RunnerAgentSpec("runner", "oracle", None, {})
+    reference, nop = bench.check_jobs.jobs
+    # The reference solution runs as this process's user, as commands do.
+    assert reference.agent == ReferenceAgentSpec("reference", USER)
     assert nop.agent == RunnerAgentSpec("runner", "nop", None, {})
-    assert (oracle.attempts, nop.attempts) == (3, 1)
-    assert len(oracle.tasks) == 12 and not oracle.network and not nop.network
-    assert oracle.run_set.endswith("-oracle") and nop.run_set.endswith("-nop")
+    assert (reference.attempts, nop.attempts) == (3, 1)
+    assert len(reference.tasks) == 12 and not reference.network and not nop.network
+    assert reference.run_set.endswith("-reference") and nop.run_set.endswith("-nop")
     assert bench.rows() == [] and bench.jobs.jobs == []
     assert bench.out.getvalue() == "12 of 12 tasks kept the rule.\n"
 
@@ -278,7 +280,7 @@ def test_check_names_each_task_whose_oracle_fails_or_whose_nothing_passes(
     bench: Bench,
 ) -> None:
     def checked(job: Job, task: str, attempt: int) -> CheckEnd:
-        oracle = isinstance(job.agent, RunnerAgentSpec) and job.agent.name == "oracle"
+        oracle = isinstance(job.agent, ReferenceAgentSpec)
         if task == "code-one" and oracle and attempt == 1:
             return "failed"
         if task == "data-two" and not oracle:
@@ -292,6 +294,13 @@ def test_check_names_each_task_whose_oracle_fails_or_whose_nothing_passes(
         "data-two: doing nothing should fail once, and the check ended: passed.",
     ]
     assert bench.out.getvalue() == "10 of 12 tasks kept the rule.\n"
+
+
+def test_check_as_root_is_refused_and_runs_nothing(bench: Bench) -> None:
+    bench.user = (0, 0)
+    assert asyncio.run(check_tasks(bench.parts())) == 1
+    assert bench.said() == AS_ROOT + "\n"
+    assert bench.check_jobs.jobs == []
 
 
 def test_two_checks_never_share_a_job_folder(bench: Bench) -> None:

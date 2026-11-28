@@ -54,6 +54,7 @@ def bench(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Bench:
         tasks=tmp_path / "tasks",
         compose=tmp_path / "no_network.yaml",
         agent_class="made_up.agent:Agent",
+        reference_class="made_up.reference:Reference",
         environment_class="made_up.environment:Environment",
     )
     return Bench(HarborJobs(paths), stand, folder)
