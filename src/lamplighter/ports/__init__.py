@@ -1,5 +1,6 @@
 """The interfaces the core calls. One file per interface."""
 
+from lamplighter.ports.bench_jobs import CheckEnd, RecordedTokens, TrialFacts
 from lamplighter.ports.blob_check import blob_damage, check_handle, check_put
 from lamplighter.ports.blob_store import BlobHandle, BlobStore
 from lamplighter.ports.channel import Channel
@@ -110,6 +111,9 @@ from lamplighter.ports.upcast import upcast
 from lamplighter.ports.value_rules import is_hash, is_id
 
 __all__ = [
+    "CheckEnd",
+    "RecordedTokens",
+    "TrialFacts",
     "CursorMark",
     "Span",
     "SpanKind",
