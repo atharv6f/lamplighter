@@ -1,0 +1,19 @@
+# What the bake-off of local model servers chooses by, fixed before any
+# candidate runs. `lamplighter models bakeoff rule` writes it into the
+# ledger with its hash. A change after that is a new rule row that names
+# the one it replaces and says why.
+
+# The most a candidate's server may hold at its peak. The smaller of
+# 32 GB and what this Mac's GPU may keep wired, measured before the rule
+# row is written.
+memory_limit_bytes = 32_000_000_000
+# A candidate within this many points out of 100 of the best share of
+# usable replies is tied with it, and the tied are ordered by speed.
+tie_points = 3
+# The level of kern.memorystatus_vm_pressure_level that puts a candidate
+# out: 4 is critical.
+pressure_limit = 4
+# Every candidate's window and longest reply, so every candidate is asked
+# the same requests and all of them fit.
+capture_window = 65_536
+capture_max_tokens = 16_000

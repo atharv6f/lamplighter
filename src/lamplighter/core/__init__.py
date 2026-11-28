@@ -1,7 +1,7 @@
 """The agent's own logic. Imports ports, never adapters."""
 
 from lamplighter.core import harness_texts
-from lamplighter.core.arguments_check import unsupported
+from lamplighter.core.arguments_check import problems, unsupported
 from lamplighter.core.chat_session import Wake, drive
 from lamplighter.core.config_id import config_id, portable_config_id
 from lamplighter.core.cost import Prices, cost_micro_dollars
@@ -13,6 +13,7 @@ from lamplighter.core.event_types import (
     MODEL_REQUEST,
     MODEL_RESPONSE,
     REPLY_READY,
+    ROUTE_DECIDED,
     SESSION_STARTED,
     TOOL_INTENT,
     TOOL_RESULT,
@@ -28,6 +29,8 @@ from lamplighter.core.observers import (
 from lamplighter.core.projector_loop import pass_to_the_end, project_while_open
 from lamplighter.core.recovery import UnfinishedSession, UnfinishedWork, unfinished_work
 from lamplighter.core.reply import Reply, fold_reply
+from lamplighter.core.route_step import ask_health
+from lamplighter.core.route_table import NamedModel, Route, RouteWhen
 from lamplighter.core.run_deps import Deps
 from lamplighter.core.run_ending import TurnEnd
 from lamplighter.core.run_spans import SPAN_LAYOUT
@@ -36,14 +39,19 @@ from lamplighter.core.run_summary import RunSummary, run_summary
 from lamplighter.core.run_turn import run_turn
 from lamplighter.core.running_sessions import RunningSessions
 from lamplighter.core.saved_facts import TokenCounts
+from lamplighter.core.session_privacy import session_is_private
 from lamplighter.core.trace_projector import PassDone, TraceProjector
 from lamplighter.core.transcript import rebuild_messages
+from lamplighter.core.upcasters import UPCASTERS
+from lamplighter.core.usable_reply import ReplyReason, ReplyVerdict, judge_reply
 
 __all__ = [
     "CANCELLED",
     "LIMIT_HIT",
     "MODEL_REQUEST",
     "REPLY_READY",
+    "ROUTE_DECIDED",
+    "UPCASTERS",
     "SESSION_STARTED",
     "SPAN_LAYOUT",
     "TOOL_INTENT",
@@ -56,6 +64,9 @@ __all__ = [
     "Observers",
     "PassDone",
     "Prices",
+    "NamedModel",
+    "Route",
+    "RouteWhen",
     "Reply",
     "RunSettings",
     "RunSpec",
@@ -77,12 +88,18 @@ __all__ = [
     "run_summary",
     "RunSummary",
     "TokenCounts",
+    "ask_health",
     "project_while_open",
     "rebuild_messages",
+    "session_is_private",
     "run_intake",
     "run_turn",
     "config_id",
     "take",
     "unfinished_work",
     "unsupported",
+    "problems",
+    "ReplyReason",
+    "ReplyVerdict",
+    "judge_reply",
 ]

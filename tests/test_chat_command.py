@@ -10,6 +10,7 @@ import dataclasses
 import io
 import os
 import signal
+import socket
 import stat
 import sys
 import threading
@@ -19,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
 from lamplighter.adapters import (
@@ -27,6 +29,7 @@ from lamplighter.adapters import (
     ScriptedTools,
     SystemClock,
 )
+from lamplighter.adapters.builtin_tools import WebAccess, closed_web
 from lamplighter.adapters.in_memory import (
     InMemoryBlobStore,
     InMemoryTraceCursor,
@@ -80,10 +83,16 @@ from lamplighter.ports import (
     Usage,
     out_id_for,
 )
-from tests.model_by_request import Choose, ModelByRequest, assistant_turns
+from tests.model_by_request import (
+    Choose,
+    ModelByRequest,
+    assistant_turns,
+    model_set,
+)
 from tests.model_samples import PROFILE
 from tests.projector_kit import DOWN
 from tests.run_history import AT, inbound
+from tests.settings_text import with_profile
 from tests.span_checks import log_spans
 from tests.span_count import promised_spans
 from tests.store_samples import action
@@ -102,8 +111,7 @@ USAGE = Usage(input_uncached=100, cache_read=0, cache_write=0, output=20)
 def config_in(tmp_path: Path) -> Config:
     config = with_tool_folders(load_config(SETTINGS), tmp_path / "store")
     return dataclasses.replace(
-        config,
-        model=PROFILE,
+        with_profile(config, PROFILE),
         run=dataclasses.replace(config.run, model_max_output=1_000),
     )
 
@@ -132,7 +140,8 @@ def parts_for(
 ) -> ChatParts:
     return chat_parts(
         config,
-        ModelByRequest(choose),
+        model_set(config, ModelByRequest(choose)),
+        tooling_for(config, StubTools(SystemClock()), answer),
         tooling_for(config, StubTools(SystemClock()), answer),
         sink or InMemoryTraceSink(),
         cursor or InMemoryTraceCursor(),
@@ -257,7 +266,7 @@ def test_a_run_saves_the_portable_id_and_the_code_revision_it_was_given(
     assert not isinstance(events, Failure)
     config = config_in(tmp_path)
     tooling = tooling_for(config, StubTools(SystemClock()))(InMemoryBlobStore(10))
-    portable = run_spec(config, tooling, REVISION).portable_config_id
+    portable = run_spec(config, tooling, REVISION, private=False).portable_config_id
     (started,) = [e.payload for e in events if e.type == "run_started"]
     assert started["code_revision"] == REVISION
     assert started["portable_config_id"] == portable
@@ -274,7 +283,8 @@ def test_the_run_spec_gives_one_portable_id_for_one_settings_file_on_two_folders
             config.tools, work_dir="/made-up/moved", scratch_dir="/made-up/other"
         ),
     )
-    here, there = run_spec(config, tooling, REVISION), run_spec(moved, tooling, "x")
+    here = run_spec(config, tooling, REVISION, private=False)
+    there = run_spec(moved, tooling, "x", private=False)
     assert here.portable_config_id == there.portable_config_id
     assert here.config_id != there.config_id
     assert (here.code_revision, there.code_revision) == (REVISION, "x")
@@ -542,41 +552,48 @@ def test_the_end_of_input_during_a_run_still_shows_the_reply(tmp_path: Path) -> 
     assert "Answer 1." in screen
 
 
-def test_the_run_spec_carries_the_wall_and_its_id_covers_all_six(
+def test_the_run_spec_carries_the_wall_and_its_id_covers_all_seven(
     tmp_path: Path,
 ) -> None:
     config = config_in(tmp_path)
     tooling = tooling_for(config, StubTools(SystemClock()))(InMemoryBlobStore(10))
-    spec = run_spec(config, tooling, REVISION)
+    spec = run_spec(config, tooling, REVISION, private=False)
     assert spec.wall == {"adapter": "fake"}
     assert spec.config_id == config_id(
-        config.model,
-        config.prices,
+        config.models,
+        config.routes,
         config.run,
         tooling.tools.list_tools(),
         dataclasses.asdict(config.tools),
         {"adapter": "fake"},
+        False,
     )
     moved = dataclasses.replace(
         config, tools=dataclasses.replace(config.tools, work_dir="/made-up/moved")
     )
-    assert run_spec(moved, tooling, REVISION).config_id != spec.config_id
+    assert run_spec(moved, tooling, REVISION, private=False).config_id != spec.config_id
+    private = run_spec(config, tooling, REVISION, private=True)
+    assert private.config_id != spec.config_id
+    assert private.portable_config_id == spec.portable_config_id
 
 
-def test_the_run_spec_names_the_model_and_the_adapter_from_the_settings(
+def test_the_run_spec_holds_the_models_and_the_routes_of_the_settings(
     tmp_path: Path,
 ) -> None:
     config = config_in(tmp_path)
     tooling = tooling_for(config, StubTools(SystemClock()))(InMemoryBlobStore(10))
-    spec = run_spec(config, tooling, REVISION)
-    assert (spec.model, spec.provider) == (config.model.model, config.model.adapter)
-    assert (spec.model, spec.provider) == ("made-up-1", "scripted")
+    spec = run_spec(config, tooling, REVISION, private=False)
+    assert spec.models == tuple(entry.named() for entry in config.models)
+    assert spec.routes == config.routes
+    assert not spec.private
+    [only] = spec.models
+    assert (only.profile.model, only.profile.adapter) == ("made-up-1", "scripted")
 
 
 def test_main_builds_the_seven_built_in_tools_behind_the_wall(tmp_path: Path) -> None:
     config = config_in(tmp_path)
     Path(config.tools.work_dir).mkdir()
-    built = builtin_tooling(config, SystemClock())(InMemoryBlobStore(10))
+    built = builtin_tooling(config, SystemClock(), closed_web())(InMemoryBlobStore(10))
     assert [entry.spec.name for entry in built.tools.list_tools()] == [
         "edit_file",
         "read_file",
@@ -589,6 +606,31 @@ def test_main_builds_the_seven_built_in_tools_behind_the_wall(tmp_path: Path) ->
     assert built.executor.wall()["adapter"] == "seatbelt"
 
 
+def test_the_built_in_tools_reach_the_web_only_through_the_access_given(
+    tmp_path: Path,
+) -> None:
+    config = config_in(tmp_path)
+    Path(config.tools.work_dir).mkdir()
+    asked: list[str] = []
+
+    async def resolve(host: str, port: int) -> tuple[str, ...]:
+        del port
+        asked.append(host)
+        raise socket.gaierror(socket.EAI_NONAME, "Made-up: no such name.")
+
+    def transport() -> httpx.AsyncBaseTransport:
+        raise AssertionError("no fetch gets past the lookup")
+
+    web = WebAccess(resolve=resolve, transport=transport)
+    built = builtin_tooling(config, SystemClock(), web)(InMemoryBlobStore(10))
+    fetched = asyncio.run(
+        built.tools.call("web_fetch", {"url": "https://made-up.example/"})
+    )
+    assert not isinstance(fetched, Failure)
+    assert fetched.is_error
+    assert asked == ["made-up.example"]
+
+
 def test_the_chat_starts_on_the_real_tools_before_their_folders_exist(
     tmp_path: Path,
 ) -> None:
@@ -598,8 +640,9 @@ def test_the_chat_starts_on_the_real_tools_before_their_folders_exist(
     screen, errors, keyboard = Screen(), io.StringIO(), typed(b"Hello.\n")
     parts = chat_parts(
         config,
-        ModelByRequest(answers),
-        builtin_tooling(config, SystemClock()),
+        model_set(config, ModelByRequest(answers)),
+        builtin_tooling(config, SystemClock(), closed_web()),
+        builtin_tooling(config, SystemClock(), closed_web()),
         InMemoryTraceSink(),
         InMemoryTraceCursor(),
         keyboard.reader,
@@ -638,7 +681,8 @@ def test_a_tool_whose_schema_the_check_cannot_read_stops_the_start(
     try:
         parts = chat_parts(
             config,
-            ModelByRequest(answers),
+            model_set(config, ModelByRequest(answers)),
+            tooling_for(config, tools),
             tooling_for(config, tools),
             InMemoryTraceSink(),
             InMemoryTraceCursor(),

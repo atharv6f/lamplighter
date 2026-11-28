@@ -212,7 +212,7 @@ def test_each_call_is_written_as_it_ends_one_line_for_each(tmp_path: Path) -> No
     count(recorder, REQUEST)
     lines = path.read_text().splitlines()
     assert len(lines) == 3
-    assert json.loads(lines[0])["v"] == 1
+    assert json.loads(lines[0])["v"] == 2
     assert [json.loads(line)["kind"] for line in lines[1:]] == ["stream", "count"]
 
 
@@ -227,9 +227,25 @@ def test_a_file_of_another_version_is_not_read(tmp_path: Path) -> None:
     path = tmp_path / "calls.jsonl"
     RecordingModel(scripted(), path)
     header = json.loads(path.read_text())
-    header["v"] = 2
+    header["v"] = 3
     path.write_text(json.dumps(header) + "\n")
-    with pytest.raises(ValueError, match="version 2"):
+    with pytest.raises(ValueError, match="version 3"):
+        ReplayedModel(path)
+
+
+def test_a_recording_from_before_the_profile_had_a_window_is_not_read(
+    tmp_path: Path,
+) -> None:
+    # The first version saved a profile with six fields. Its profile cannot
+    # be read now, and the message names the version, not a missing field.
+    path = tmp_path / "calls.jsonl"
+    RecordingModel(scripted(), path)
+    header = json.loads(path.read_text())
+    header["v"] = 1
+    for name in ("window", "concurrent_requests", "stays_on_mac"):
+        del header["profile"][name]
+    path.write_text(json.dumps(header) + "\n")
+    with pytest.raises(ValueError, match="version 1, not 2"):
         ReplayedModel(path)
 
 

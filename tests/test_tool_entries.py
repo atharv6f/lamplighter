@@ -17,8 +17,8 @@ def test_the_listed_tools_give_the_portable_id_a_trial_works_out(
     request = trial.request()
     config = load_config(trial.settings)
     listed = portable_config_id(
-        config.model,
-        config.prices,
+        config.models,
+        config.routes,
         config.run,
         tool_entries(config),
         dataclasses.asdict(config.tools),

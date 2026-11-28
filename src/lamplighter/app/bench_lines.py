@@ -4,6 +4,7 @@ from collections.abc import Sequence
 
 from lamplighter.bench import GateDecision, RunSet, SideSummary
 from lamplighter.ports import (
+    BakeoffRow,
     CorrectionRow,
     DecisionRow,
     LedgerRow,
@@ -11,6 +12,7 @@ from lamplighter.ports import (
     RunSetRow,
     StartRow,
     from_plain,
+    from_stored,
 )
 
 
@@ -95,24 +97,38 @@ def ledger_line(row: LedgerRow) -> str:
         case StartRow():
             what = f"{row.body.side} starts on {row.body.split}"
         case RunSetRow():
-            what = run_set_line(from_plain(RunSet, row.body.run_set))
+            what = run_set_line(from_stored(RunSet, row.body.run_set))
         case DecisionRow():
             decision = from_plain(GateDecision, row.body.decision)
             what = f"{decision.outcome}, because {decision.why}"
         case CorrectionRow():
             what = f"corrects {row.body.corrects}: {row.body.note}"
+        case BakeoffRow():
+            step = row.body
+            what = f"bake-off {step.stage} {step.server} {step.model}".rstrip()
     return f"{head}  {what}"
 
 
 def run_set_line(found: RunSet) -> str:
-    """Give a run set's name and how its trials came out."""
+    """Give a run set's name, how its trials came out, and its ladders.
+
+    The ladders, and how many trials moved up one, are left out for a run
+    set that names none: a baseline's, or one kept before they were.
+    """
     counts = {"pass": 0, "fail": 0, "infra": 0}
     for trial in found.trials:
         counts[trial.outcome] += 1
-    return (
+    line = (
         f"{found.run_set}: {counts['pass']} passed, {counts['fail']} failed,"
         f" {counts['infra']} infra, of {len(found.trials)} trials"
     )
+    if not found.ladders:
+        return line
+    ladders = ", ".join(
+        f"{ladder.route} {' then '.join(ladder.models)}" for ladder in found.ladders
+    )
+    escalated = sum(trial.escalated for trial in found.trials)
+    return f"{line}; ladders {ladders}; {escalated} escalated"
 
 
 def _side(name: str, side: SideSummary) -> str:

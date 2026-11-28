@@ -30,6 +30,8 @@ from lamplighter.ports import (
 from tests.anthropic.fake_server import FakeServer, client_for, counted, refusal, reply
 from tests.anthropic.wire_text import OWN_REASONING, stream_body
 from tests.model_samples import PROFILE, REASONING
+from tests.openai_chat import fake_server as local
+from tests.openai_chat.wire_text import Dialect, own_reasoning
 
 type Turn = ScriptedReply | ScriptedBreak
 
@@ -40,10 +42,12 @@ class ClientKind:
 
     `reasoning` is a reasoning part as this kind gives it. Each kind seals its
     reasoning in its own way, so a script cannot use one part for all of them.
+    `counts` is false for a server with no way to count a prompt.
     """
 
     make: Callable[[Sequence[Turn]], ModelClient]
     reasoning: ReasoningPart
+    counts: bool = True
 
 
 def scripted(turns: Sequence[Turn]) -> ModelClient:
@@ -112,8 +116,25 @@ def replayed(turns: Sequence[Turn]) -> ModelClient:
     return _ThroughARecording(scripted(turns))
 
 
+def local_server(dialect: Dialect) -> Callable[[Sequence[Turn]], ModelClient]:
+    """Give a maker of the local client, talking to a made-up server of one dialect."""
+
+    def make(turns: Sequence[Turn]) -> ModelClient:
+        serve, _ = local.serving(dialect, turns)
+        return local.client_for(serve, dialect)
+
+    return make
+
+
 KINDS = {
     "scripted": ClientKind(make=scripted, reasoning=REASONING),
     "anthropic": ClientKind(make=anthropic, reasoning=OWN_REASONING),
     "replayed": ClientKind(make=replayed, reasoning=REASONING),
+    "llama_cpp": ClientKind(
+        make=local_server("llama_cpp"), reasoning=own_reasoning("llama_cpp")
+    ),
+    "mlx_lm": ClientKind(
+        make=local_server("mlx_lm"), reasoning=own_reasoning("mlx_lm"), counts=False
+    ),
+    "vllm": ClientKind(make=local_server("vllm"), reasoning=own_reasoning("vllm")),
 }

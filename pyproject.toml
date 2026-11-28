@@ -50,16 +50,18 @@ testpaths = ["tests"]
 # Tests marked "live" call the real API and cost money, tests marked "crash"
 # kill a process 200 times and take minutes, tests marked "sandbox" need
 # macOS's sandbox-exec, tests marked "phoenix" start the pinned Phoenix,
-# about 700 MB once installed, and tests marked "container" need Docker, so
-# the default run leaves all five out. "-m live", "-m crash", "-m sandbox",
-# "-m phoenix" or "-m container" on the command line runs them.
-addopts = "-m 'not live and not crash and not sandbox and not phoenix and not container'"
+# about 700 MB once installed, tests marked "container" need Docker, and
+# tests marked "mac" run programs only macOS has, so the default run leaves
+# all six out. "-m live", "-m crash", "-m sandbox", "-m phoenix",
+# "-m container" or "-m mac" on the command line runs them.
+addopts = "-m 'not live and not crash and not sandbox and not phoenix and not container and not mac'"
 markers = [
     "live: calls the real Anthropic API and needs ANTHROPIC_API_KEY",
     "crash: kills a process that writes to a real store, 200 times",
     "sandbox: runs commands behind the real wall and needs macOS's sandbox-exec",
     "phoenix: starts the pinned Phoenix through scripts/phoenix/start.sh",
     "container: runs commands in a Docker container of the pinned image",
+    "mac: runs programs only macOS has at their paths, such as /usr/sbin/lsof",
 ]
 
 [tool.importlinter]
@@ -72,6 +74,23 @@ name = "core does not import adapters"
 type = "forbidden"
 source_modules = ["lamplighter.core"]
 forbidden_modules = ["lamplighter.adapters"]
+
+# Code two adapters share lives in a file at the adapters root, never in
+# one adapter's package.
+[[tool.importlinter.contracts]]
+name = "no adapter imports another adapter's package"
+type = "independence"
+modules = [
+    "lamplighter.adapters.anthropic",
+    "lamplighter.adapters.builtin_tools",
+    "lamplighter.adapters.container",
+    "lamplighter.adapters.harbor_jobs",
+    "lamplighter.adapters.in_memory",
+    "lamplighter.adapters.openai_chat",
+    "lamplighter.adapters.phoenix",
+    "lamplighter.adapters.seatbelt",
+    "lamplighter.adapters.sqlite",
+]
 
 [[tool.importlinter.contracts]]
 name = "only adapters and app use the HTTP library"

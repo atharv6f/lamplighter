@@ -10,10 +10,13 @@ import random
 from collections.abc import AsyncGenerator, Callable
 
 from lamplighter.adapters import ScriptedBreak, ScriptedModel, ScriptedReply
+from lamplighter.app.config import Config
+from lamplighter.app.model_set import ModelSet
 from lamplighter.ports import (
     Clock,
     Failure,
     Message,
+    ModelClient,
     ModelEvent,
     ModelProfile,
     ModelRequest,
@@ -99,3 +102,12 @@ def _check_user_side(message: Message) -> None:
 
 def _calls(message: Message) -> tuple[ToolCallPart, ...]:
     return tuple(part for part in message.parts if isinstance(part, ToolCallPart))
+
+
+def model_set(config: Config, client: ModelClient) -> ModelSet:
+    """Give every model entry of the settings the one client, with no health checks."""
+
+    async def close() -> None:
+        pass
+
+    return ModelSet({entry.name: client for entry in config.models}, {}, close)

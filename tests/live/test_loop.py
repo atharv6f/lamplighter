@@ -39,7 +39,7 @@ from lamplighter.adapters.sqlite import (
 from lamplighter.app.chat import Tooling, run_spec
 from lamplighter.app.code_revision import REPO_ROOT, code_revision
 from lamplighter.app.config import Config, load_config
-from lamplighter.app.main import build_model
+from lamplighter.app.main import build_models
 from lamplighter.app.tool_folders import make_tool_folders
 from lamplighter.core import Deps, Observers, RunningSessions, Wake, drive, take
 from lamplighter.ports import (
@@ -94,7 +94,8 @@ def config() -> Config:
 
 @pytest.fixture
 def client(config: Config) -> ModelClient:
-    return build_model(config, os.environ["ANTHROPIC_API_KEY"])
+    models = build_models(config, os.environ["ANTHROPIC_API_KEY"], SystemClock())
+    return models.clients[config.default_model().name]
 
 
 def behind_the_wall(config: Config) -> Executor:
@@ -236,7 +237,8 @@ def chat(
             log=SqliteEventLog(connection, {}, limit),
             inbox=SqliteInbox(connection, limit),
             outbox=SqliteOutbox(connection, clock, limit),
-            model=client,
+            models={config.default_model().name: client},
+            health={},
             tools=given,
             ledger=SqliteEffectLedger(connection, clock, limit),
             blobs=blobs,
@@ -247,7 +249,9 @@ def chat(
         )
         wake = Wake()
         wake.end_input()
-        spec = run_spec(config, Tooling(given, executor), code_revision(REPO_ROOT))
+        spec = run_spec(
+            config, Tooling(given, executor), code_revision(REPO_ROOT), False
+        )
         assert await drive(SESSION, spec, deps, channel, wake, lambda: None) is None
 
     async def run_all() -> tuple[Event, ...]:

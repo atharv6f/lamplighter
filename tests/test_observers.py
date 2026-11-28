@@ -255,8 +255,8 @@ def test_no_tool_observer_sees_a_read_answered_interrupted_after_two_starts() ->
             long_note(1), calls(note("c1")), DONE, clock=JumpingClock()
         )
         inner = loop.log
-        # The fifth append is the result of c1, so c1 is left started.
-        loop.log = FailingLog(inner, failing=5)
+        # The sixth append is the result of c1, so c1 is left started.
+        loop.log = FailingLog(inner, failing=6)
         await ask(loop)
         assert not isinstance(await run_turn(SESSION, SPEC, loop.deps), TurnEnd)
         # The read is run once more, and its result is lost again: the

@@ -7,7 +7,13 @@ numbers for the same run are the same.
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from lamplighter.core.event_types import MODEL_REQUEST, MODEL_RESPONSE, TOOL_RESULT
+from lamplighter.core.event_types import (
+    MODEL_REQUEST,
+    MODEL_RESPONSE,
+    ROUTE_DECIDED,
+    TOOL_RESULT,
+)
+from lamplighter.core.model_choice import ChoiceReason
 from lamplighter.core.saved_facts import TokenCounts, saved_cost, token_counts
 from lamplighter.ports import RUN_END, RUN_STARTED, Event
 
@@ -18,7 +24,11 @@ class RunSummary:
 
     `reason` and `detail` are those of its `run_end`, or None while it has
     not ended. A reply with a token count missing adds nothing to `tokens`.
-    `micro_dollars` is None when a reply had no price.
+    `micro_dollars` is None when a reply had no price. `models_called` are
+    the names of the models it asked, in the order it first asked each.
+    `escalated` says it moved up its ladder on a signal and then asked the
+    model it moved to. `output_fault` is what the adapter's end checks
+    found in its last reply, such as `call_markup`, or None.
     """
 
     run_id: str
@@ -28,6 +38,9 @@ class RunSummary:
     tool_calls: int
     tokens: TokenCounts
     micro_dollars: int | None
+    models_called: tuple[str, ...]
+    escalated: bool
+    output_fault: str | None
 
 
 def run_summary(events: Iterable[Event]) -> RunSummary | None:
@@ -76,7 +89,45 @@ def _summed(run_id: str, events: list[Event]) -> RunSummary:
         tool_calls=tool_calls,
         tokens=TokenCounts(uncached, read, written, output),
         micro_dollars=cost if priced else None,
+        models_called=_models_called(events),
+        escalated=_escalated(events),
+        output_fault=_output_fault(events),
     )
+
+
+# The reasons of a choice that are not a signal to move up.
+_NOT_SIGNALS: frozenset[ChoiceReason] = frozenset({"start", "skipped"})
+
+
+def _models_called(events: list[Event]) -> tuple[str, ...]:
+    names = [
+        event.payload.get("model_name")
+        for event in events
+        if event.type == MODEL_REQUEST
+    ]
+    return tuple(dict.fromkeys(n for n in names if isinstance(n, str)))
+
+
+def _escalated(events: list[Event]) -> bool:
+    moved_to: str | None = None
+    for event in events:
+        if event.type == ROUTE_DECIDED:
+            reason = event.payload.get("reason")
+            model = _text(event.payload.get("model"))
+            moved_to = None if reason in _NOT_SIGNALS else model
+            continue
+        asked = event.payload.get("model_name") if event.type == MODEL_REQUEST else None
+        if moved_to is not None and asked == moved_to:
+            return True
+    return False
+
+
+def _output_fault(events: list[Event]) -> str | None:
+    replies = [e.payload for e in events if e.type == MODEL_RESPONSE]
+    end = replies[-1].get("end") if replies else None
+    failure = end.get("failure") if isinstance(end, dict) else None
+    detail = failure.get("detail") if isinstance(failure, dict) else None
+    return _text(detail.get("model_output")) if isinstance(detail, dict) else None
 
 
 def _text(value: object) -> str | None:

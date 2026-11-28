@@ -26,8 +26,11 @@ from lamplighter.app.bench_parts import (
     revision_fault,
     task_view,
 )
+from lamplighter.app.config import Config
 from lamplighter.bench import (
     HARNESS,
+    ConfigLadder,
+    ConfigModel,
     GateDecision,
     NotWhole,
     RunSet,
@@ -55,6 +58,7 @@ from lamplighter.ports import (
     StartRow,
     TrialFacts,
     from_plain,
+    from_stored,
     held_out_uses,
     to_plain,
     utc_text,
@@ -183,7 +187,7 @@ def _loose_job(
     settings: LoadedSettings,
     revision: str,
 ) -> tuple[Job, RunSetPlan] | str:
-    model = settings.config.model
+    model = settings.config.default_model().profile
     planned = RunSetPlan(
         run_set=name,
         harness=harness,
@@ -195,18 +199,26 @@ def _loose_job(
         tasks=chosen.tasks,
         model=model.model,
         provider=model.adapter,
+        models=(),
+        ladders=(),
     )
     attempts = chosen.trials_per_task
     if harness != HARNESS:
         # A baseline installs itself, so its container has a network.
         agent = RunnerAgentSpec("runner", harness, model.model, BASELINES[harness])
-        return Job(name, chosen.tasks, attempts, _pace(parts), True, agent), planned
+        pace = _pace(parts, settings.config)
+        return Job(name, chosen.tasks, attempts, pace, True, agent), planned
     copy = _settings_copy(parts, name, settings)
     if isinstance(copy, str):
         return copy
     if copy.sha256 != settings.sha256:
         return f"The run set {name} was started with other settings, in {copy.path}."
-    planned = dataclasses.replace(planned, portable_config_id=copy.portable_id)
+    planned = dataclasses.replace(
+        planned,
+        portable_config_id=copy.portable_id,
+        models=_models(copy.config),
+        ladders=_ladders(copy.config),
+    )
     return _harness_job(parts, name, chosen.tasks, attempts, copy, revision), planned
 
 
@@ -272,8 +284,10 @@ async def _side(parts: BenchParts, plan: PlanRow, side: Side, revision: str) -> 
         split=plan.body.split,
         trials_per_task=plan.body.trials_per_task,
         tasks=plan.body.tasks,
-        model=copy.config.model.model,
-        provider=copy.config.model.adapter,
+        model=copy.config.default_model().profile.model,
+        provider=copy.config.default_model().profile.adapter,
+        models=_models(copy.config),
+        ladders=_ladders(copy.config),
     )
     attempts = plan.body.trials_per_task
     job = _harness_job(parts, name, plan.body.tasks, attempts, copy, revision)
@@ -291,6 +305,7 @@ async def _whole(
     # that code before the job and after it.
     if parts.revision() != planned.code_revision:
         return parts.refuse(CHANGED_DURING)
+    print(f"Trials at once: {job.concurrent_trials}.", file=parts.out)
     failed = await parts.jobs.run(job)
     if failed is not None:
         return parts.refuse(failed.message)
@@ -379,7 +394,7 @@ def _decision(rows: list[LedgerRow], plan: PlanRow) -> GateDecision | Failure:
     # The run sets are read back from the ledger, so what is compared is
     # exactly what was recorded.
     sides = {
-        r.body.side: from_plain(RunSet, r.body.run_set)
+        r.body.side: from_stored(RunSet, r.body.run_set)
         for r in rows
         if isinstance(r, RunSetRow) and r.experiment == plan.experiment
     }
@@ -423,11 +438,25 @@ def _harness_job(
         code_revision=revision,
         run_as=parts.user,
     )
-    return Job(name, tasks, attempts, _pace(parts), False, agent)
+    return Job(name, tasks, attempts, _pace(parts, copy.config), False, agent)
 
 
-def _pace(parts: BenchParts) -> int:
-    return parts.settings.concurrent_trials
+def _models(config: Config) -> tuple[ConfigModel, ...]:
+    return tuple(ConfigModel(e.name, e.profile.model) for e in config.models)
+
+
+def _ladders(config: Config) -> tuple[ConfigLadder, ...]:
+    return tuple(ConfigLadder(route.id, route.models) for route in config.routes)
+
+
+def _pace(parts: BenchParts, config: Config) -> int:
+    # A server on this Mac runs only its own number of requests at once and
+    # queues the rest, and a trial waiting there spends its seconds idle.
+    # The settings refuse a model no route names, so each one is on a ladder.
+    local = [
+        e.profile.concurrent_requests for e in config.models if e.local is not None
+    ]
+    return min([parts.settings.concurrent_trials, *local])
 
 
 def _not_whole(parts: BenchParts, found: NotWhole, planned: RunSetPlan) -> int:

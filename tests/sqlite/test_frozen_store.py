@@ -14,7 +14,7 @@ from lamplighter.adapters.sqlite import (
     SqliteInbox,
     SqliteOutbox,
 )
-from lamplighter.core import rebuild_messages
+from lamplighter.core import UPCASTERS, rebuild_messages
 from lamplighter.ports import (
     Begun,
     EffectLedger,
@@ -68,13 +68,13 @@ def test_the_frozen_version_1_store_reads_as_this_code_would_write_it(
     connection = opened(path)
     from_file = run(
         everything(
-            SqliteEventLog(connection, {}, LIMIT),
+            SqliteEventLog(connection, UPCASTERS, LIMIT),
             SqliteEffectLedger(connection, FakeClock(), LIMIT),
             SqliteInbox(connection, LIMIT),
         )
     )
     fakes = (
-        InMemoryEventLog({}, LIMIT),
+        InMemoryEventLog(UPCASTERS, LIMIT),
         InMemoryEffectLedger(FakeClock(), LIMIT),
         InMemoryInbox(LIMIT),
     )
@@ -89,7 +89,7 @@ def test_the_frozen_session_rebuilds_into_its_transcript(tmp_path: Path) -> None
     built = sqlite3.connect(path)
     built.executescript(FROZEN.read_text())
     built.close()
-    events = run(SqliteEventLog(opened(path), {}, LIMIT).read("sess-a", 0))
+    events = run(SqliteEventLog(opened(path), UPCASTERS, LIMIT).read("sess-a", 0))
     assert not isinstance(events, Failure), events
     assert rebuild_messages(events) == (
         Message(role="user", parts=(TextPart(text="What is on my list?"),)),

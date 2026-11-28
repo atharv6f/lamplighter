@@ -218,7 +218,8 @@ def test_a_lost_model_call_counts_as_a_step_and_spends_nothing() -> None:
         model = ModelByRequest(runaway, clock, 100)
         loop = in_memory(model, clock, tools)
         inner = loop.log
-        loop.log = FailingLog(inner, failing=3)
+        # The fourth append is the first reply, so that call is lost.
+        loop.log = FailingLog(inner, failing=4)
         await loop.inbox.accept(inbound("n1", QUESTION))
         spec = replace(SPEC, max_steps=3, max_seconds=250)
         assert isinstance(await run_turn(SESSION, spec, loop.deps), Failure)
@@ -312,9 +313,9 @@ def test_a_run_open_under_other_settings_ends_after_its_started_call_is_answered
         model = ModelByRequest(in_order(calls(note("c1"), note("c2", n=2))), clock)
         loop = in_memory(model, clock, tools)
         inner = loop.log
-        # The fifth append is c1's result. It fails as a kill would, after
+        # The sixth append is c1's result. It fails as a kill would, after
         # the tool ran, so the call has an intent and no result.
-        loop.log = FailingLog(inner, failing=5)
+        loop.log = FailingLog(inner, failing=6)
         await loop.inbox.accept(inbound("n1", QUESTION))
         old = replace(SPEC, config_id="d" * 64)
         assert isinstance(await run_turn(SESSION, old, loop.deps), Failure)

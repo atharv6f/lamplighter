@@ -16,9 +16,10 @@ from typing import cast
 
 import pytest
 
+from lamplighter.adapters import SystemClock
 from lamplighter.adapters.sqlite import SqliteEventLog, open_database
 from lamplighter.app.config import Config, load_config
-from lamplighter.app.main import build_model
+from lamplighter.app.main import build_models
 from lamplighter.core import (
     MODEL_RESPONSE,
     TOOL_RESULT,
@@ -92,7 +93,8 @@ def config() -> Config:
 
 @pytest.fixture
 def client(config: Config) -> ModelClient:
-    return build_model(config, os.environ["ANTHROPIC_API_KEY"])
+    models = build_models(config, os.environ["ANTHROPIC_API_KEY"], SystemClock())
+    return models.clients[config.default_model().name]
 
 
 def user(*parts: TextPart | ToolResultPart) -> Message:
@@ -130,7 +132,9 @@ def prompt_size(usage: Usage) -> int:
 def show(label: str, reply: Reply, config: Config) -> None:
     usage = reply.usage
     assert usage is not None, "the server reported no usage"
-    cost = cost_micro_dollars(usage, config.prices)
+    prices = config.default_model().prices
+    assert prices is not None
+    cost = cost_micro_dollars(usage, prices)
     dollars = "unknown" if cost is None else f"${cost / 1_000_000:.6f}"
     print(
         f"\n{label}: uncached {usage.input_uncached}, cache read {usage.cache_read},"
@@ -305,4 +309,4 @@ def test_a_token_count_is_as_close_to_the_real_size_as_the_profile_says(
         worst = max(worst, gap)
         print(f"\n{label}: counted {counted}, real {real}, gap {gap} per thousand")
     print(f"\nlargest gap: {worst} per thousand")
-    assert worst <= config.model.count_error_permille
+    assert worst <= config.default_model().profile.count_error_permille

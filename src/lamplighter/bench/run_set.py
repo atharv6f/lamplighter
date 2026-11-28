@@ -19,10 +19,28 @@ HARNESS = "lamplighter"
 
 
 @dataclass(frozen=True, slots=True)
+class ConfigModel:
+    """One model entry of a run set's settings: its name and the model it runs."""
+
+    name: str
+    model: str
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigLadder:
+    """One route of a run set's settings: its id and its ladder, weakest first."""
+
+    route: str
+    models: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class RunSetPlan:
     """What a run set was planned with.
 
-    `portable_config_id` is empty for a baseline harness.
+    `portable_config_id` is empty for a baseline harness, and `models` and
+    `ladders`, read from the settings this repo's harness runs on, are
+    empty for one.
     """
 
     run_set: str
@@ -35,6 +53,8 @@ class RunSetPlan:
     tasks: tuple[str, ...]
     model: str
     provider: str
+    models: tuple[ConfigModel, ...]
+    ladders: tuple[ConfigLadder, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +65,8 @@ class TrialResult:
     record that can be read has no ending, no steps and no tool calls, and
     the tokens and cost the job runner was given, which is how a baseline
     harness is counted. `ms` is the job runner's, on every harness.
+    `models_called` and `escalated` are the record's, and none named and
+    false with no record. A result kept before they were has the same.
     """
 
     task: str
@@ -59,11 +81,17 @@ class TrialResult:
     ms: int
     runner_name: str
     task_folder_hash: str
+    models_called: tuple[str, ...] = ()
+    escalated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class RunSet:
-    """A whole run set: each planned task has exactly its trials."""
+    """A whole run set: each planned task has exactly its trials.
+
+    `models` and `ladders` are the plan's. A run set kept before they were
+    reads with none.
+    """
 
     run_set: str
     harness: str
@@ -76,6 +104,8 @@ class RunSet:
     model: str
     provider: str
     trials: tuple[TrialResult, ...]
+    models: tuple[ConfigModel, ...] = ()
+    ladders: tuple[ConfigLadder, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +159,8 @@ def run_set(plan: RunSetPlan, found: Iterable[TrialFacts]) -> RunSet | NotWhole:
         trials_per_task=plan.trials_per_task,
         model=plan.model,
         provider=plan.provider,
+        models=plan.models,
+        ladders=plan.ladders,
         trials=tuple(
             _result(plan.harness, attempt, facts)
             for _, trials in sorted(by_task.items())
@@ -164,6 +196,8 @@ def _numbered(
         ms=facts.ms,
         runner_name=facts.runner_name,
         task_folder_hash=facts.task_folder_hash,
+        models_called=() if record is None else record.models_called,
+        escalated=False if record is None else record.escalated,
     )
 
 

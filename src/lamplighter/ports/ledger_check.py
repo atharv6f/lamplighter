@@ -8,6 +8,8 @@ import re
 from collections.abc import Sequence
 
 from lamplighter.ports.experiment_ledger import (
+    BakeoffBody,
+    BakeoffRow,
     CorrectionRow,
     DecisionRow,
     LedgerRow,
@@ -19,6 +21,7 @@ from lamplighter.ports.failure import Failure, FailureKind
 from lamplighter.ports.json_text import canonical_json, read_saved_json
 from lamplighter.ports.json_value import JsonObject
 from lamplighter.ports.plain import from_plain
+from lamplighter.ports.value_rules import is_hash
 
 SOURCE = "experiment_ledger"
 _NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
@@ -29,6 +32,7 @@ _ROWS: dict[str, type[LedgerRow]] = {
     "run_set": RunSetRow,
     "decision": DecisionRow,
     "correction": CorrectionRow,
+    "bakeoff": BakeoffRow,
 }
 # How many config ids a row of each kind names. A run set of a baseline
 # harness names none.
@@ -38,6 +42,7 @@ _CONFIG_IDS: dict[str, tuple[int, ...]] = {
     "run_set": (0, 1),
     "decision": (2,),
     "correction": (0,),
+    "bakeoff": (0,),
 }
 
 
@@ -67,6 +72,12 @@ def refused_row(rows: Sequence[LedgerRow], row: LedgerRow) -> Failure | None:
     decision, a start or run set that does not agree with its plan, a
     decision without its plan and run sets, a decision with the wrong
     count of held-out uses, and a correction of a row that is not there.
+
+    A bake-off row is refused when it is a second rule row that does not
+    name the latest as the one it replaces and say why, or a first one
+    that names one; a candidate or soak row whose rule hash or capture
+    set hash is not the latest rule row's; or a chosen choice row whose
+    winner has no passing soak row under the same rule.
     """
     try:
         read_row(row_text(row))
@@ -106,6 +117,8 @@ def _shape_fault(row: LedgerRow) -> str | None:
         return f"version {row.v}"
     if len(row.config_ids) not in _CONFIG_IDS[row.kind]:
         return f"a {row.kind} row with {len(row.config_ids)} config ids"
+    if isinstance(row, BakeoffRow):
+        return _bakeoff_fault(row)
     loose = isinstance(row, RunSetRow) and not row.experiment
     # A correction of a loose run set has the run set's empty experiment.
     unnamed = loose or (isinstance(row, CorrectionRow) and not row.experiment)
@@ -138,11 +151,32 @@ def _run_set_fault(row: RunSetRow, loose: bool) -> str | None:
     return None
 
 
+def _bakeoff_fault(row: BakeoffRow) -> str | None:
+    body = row.body
+    if row.experiment:
+        return f"a bakeoff row of the experiment {row.experiment!r}"
+    if not is_hash(body.rule_hash):
+        return "a bakeoff row with no rule hash"
+    if body.stage == "soak" and _soak_passed(body) is None:
+        return "a soak row with no stays_up result"
+    named = all((body.server, body.model, body.weights_sha256))
+    unnamed = not any((body.server, body.model, body.weights_sha256))
+    if body.stage == "choice" and not (named if body.chosen else unnamed):
+        return "a choice row whose winner does not fit whether one is chosen"
+    return None
+
+
+def _soak_passed(body: BakeoffBody) -> bool | None:
+    found = body.criteria.get("stays_up")
+    passed = found.get("passed") if isinstance(found, dict) else None
+    return passed if isinstance(passed, bool) else None
+
+
 def _taken(rows: Sequence[LedgerRow], row: LedgerRow) -> bool:
     # One plan, one start and one run set for each side, and one decision.
     if isinstance(row, RunSetRow) and not row.experiment:
         return False
-    if isinstance(row, CorrectionRow):
+    if isinstance(row, CorrectionRow | BakeoffRow):
         return False
     return any(
         r.kind == row.kind and r.experiment == row.experiment and _side(r) == _side(row)
@@ -151,6 +185,8 @@ def _taken(rows: Sequence[LedgerRow], row: LedgerRow) -> bool:
 
 
 def _disagrees(rows: Sequence[LedgerRow], row: LedgerRow) -> str | None:
+    if isinstance(row, BakeoffRow):
+        return _bakeoff_disagrees(rows, row.body)
     if isinstance(row, RunSetRow) and not row.experiment:
         split = row.body.run_set.get("split")
         return (
@@ -210,6 +246,55 @@ def _decision_disagrees(
     if sides != {"baseline", "candidate"}:
         return f"The experiment {row.experiment} lacks a run set for a side."
     return None
+
+
+def _bakeoff_disagrees(rows: Sequence[LedgerRow], body: BakeoffBody) -> str | None:
+    rules = [
+        r.body for r in rows if isinstance(r, BakeoffRow) and r.body.stage == "rule"
+    ]
+    latest = rules[-1] if rules else None
+    if body.stage == "rule":
+        return _rule_disagrees(latest, body)
+    under = latest is not None and (body.rule_hash, body.capture_set_hash) == (
+        latest.rule_hash,
+        latest.capture_set_hash,
+    )
+    if not under:
+        return f"The {body.stage} row is not under the latest rule."
+    if body.chosen and not any(_passing_soak(r, body) for r in rows):
+        return f"The winner {body.server} {body.model} has no passing soak row."
+    return None
+
+
+def _rule_disagrees(latest: BakeoffBody | None, body: BakeoffBody) -> str | None:
+    if latest is None:
+        return "There is no rule row to replace." if body.replaces else None
+    if body.replaces != latest.rule_hash or not body.why:
+        return (
+            "A rule row is there: a new one names the latest as the one it"
+            " replaces, and says why."
+        )
+    return None
+
+
+def _passing_soak(row: LedgerRow, choice: BakeoffBody) -> bool:
+    if not isinstance(row, BakeoffRow) or row.body.stage != "soak":
+        return False
+    soak = row.body
+    same = (
+        soak.rule_hash,
+        soak.capture_set_hash,
+        soak.server,
+        soak.model,
+        soak.weights_sha256,
+    ) == (
+        choice.rule_hash,
+        choice.capture_set_hash,
+        choice.server,
+        choice.model,
+        choice.weights_sha256,
+    )
+    return same and _soak_passed(soak) is True
 
 
 def _planned_id(plan: PlanRow, side: str) -> str:

@@ -305,9 +305,10 @@ class StopAfterRead:
 def test_a_stop_saved_just_after_the_inbox_read_keeps_the_model_from_starting() -> None:
     async def scenario() -> None:
         loop, _, model = loop_with(long_note(1), DONE)
-        # The third read is the pass that calls the model: the first starts
-        # the run and the second marks the message.
-        loop.inbox = StopAfterRead(loop, on=3)
+        # The fourth read is the pass that calls the model: the first starts
+        # the run, the second marks the message and the third saves the
+        # run's choice of model.
+        loop.inbox = StopAfterRead(loop, on=4)
         ended = await (await start(loop))
         assert isinstance(ended, TurnEnd) and ended.reason == "cancelled"
         assert model.requests == []

@@ -1,8 +1,9 @@
 """The rows of the frozen stores of tool calls: every event as the loop writes it.
 
 The text files tests/stores/version_2_tools.sql,
-tests/stores/version_2_tools_with_model.sql and
-tests/stores/version_2_tools_with_revision.sql were each made once, by running
+tests/stores/version_2_tools_with_model.sql,
+tests/stores/version_2_tools_with_revision.sql and
+tests/stores/version_2_routes.sql were each made once, by running
 these chats through the loop of their day on the SQLite adapters and
 dumping the file as SQL. The text files are never edited, and these chats
 are not changed. The test compares the newer file with what the in-memory
@@ -41,7 +42,7 @@ from lamplighter.ports import (
 )
 from tests.kill_kit import MirroredLedger, answers
 from tests.model_by_request import ModelByRequest
-from tests.run_history import SPEC, inbound, stop
+from tests.run_history import MODEL_NAME, SPEC, inbound, stop
 from tests.waiting_clock import JumpingClock
 
 USAGE = Usage(input_uncached=100, cache_read=0, cache_write=0, output=20)
@@ -157,7 +158,8 @@ async def write_tool_samples(
         log=log,
         inbox=inbox,
         outbox=outbox,
-        model=ModelByRequest(answers(SCRIPT)),
+        models={MODEL_NAME: ModelByRequest(answers(SCRIPT))},
+        health={},
         tools=tools,
         ledger=breaking,
         blobs=blobs,

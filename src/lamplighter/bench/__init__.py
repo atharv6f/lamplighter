@@ -1,5 +1,28 @@
 """The bench's own rules, as pure functions on plain values."""
 
+from lamplighter.bench.bakeoff_measures import (
+    HARD,
+    AdapterPerRequest,
+    CandidateMeasures,
+    FirstToken,
+    PeakMemory,
+    ReplyReason,
+    SoakCounts,
+    SoakMeasures,
+    Speeds,
+    UsableReplies,
+)
+from lamplighter.bench.bakeoff_rule import (
+    BakeoffChoice,
+    BakeoffRule,
+    Candidate,
+    Left,
+    bakeoff_choice,
+    bakeoff_rule_hash,
+    candidate_of,
+    read_bakeoff_rule,
+    stays_up,
+)
 from lamplighter.bench.gate import (
     COST_GUARD,
     MOST_TASKS,
@@ -22,6 +45,8 @@ from lamplighter.bench.outcome import (
 )
 from lamplighter.bench.run_set import (
     HARNESS,
+    ConfigLadder,
+    ConfigModel,
     NotWhole,
     RunSet,
     RunSetPlan,
@@ -34,6 +59,7 @@ from lamplighter.bench.split import DEV_PLACES, Split, split
 from lamplighter.bench.task_rules import GROUPS, PINNED_IMAGE, REQUIRED, task_faults
 from lamplighter.bench.task_set import TaskFile, task_set_hash
 from lamplighter.bench.trial_record import (
+    OUTPUT_FAULT,
     BoundWord,
     InfraReason,
     Tokens,
@@ -45,6 +71,26 @@ from lamplighter.bench.trial_record import (
 )
 
 __all__ = [
+    "HARD",
+    "OUTPUT_FAULT",
+    "AdapterPerRequest",
+    "BakeoffChoice",
+    "BakeoffRule",
+    "Candidate",
+    "CandidateMeasures",
+    "FirstToken",
+    "Left",
+    "PeakMemory",
+    "ReplyReason",
+    "SoakCounts",
+    "SoakMeasures",
+    "Speeds",
+    "UsableReplies",
+    "bakeoff_choice",
+    "bakeoff_rule_hash",
+    "candidate_of",
+    "read_bakeoff_rule",
+    "stays_up",
     "DEV_PLACES",
     "GROUPS",
     "PINNED_IMAGE",
@@ -72,6 +118,8 @@ __all__ = [
     "NotWhole",
     "OutcomeKind",
     "OutcomeReason",
+    "ConfigLadder",
+    "ConfigModel",
     "RunSet",
     "RunSetPlan",
     "TaskCount",

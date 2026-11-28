@@ -244,8 +244,14 @@ def test_a_token_count_is_a_whole_number_and_not_negative(
     kind: ClientKind,
 ) -> None:
     size = count(kind.make([]), ask())
-    assert isinstance(size, int)
-    assert size >= 0
+    if kind.counts:
+        assert isinstance(size, int)
+        assert size >= 0
+    else:
+        # A server with no way to count says so, and changes nothing.
+        assert isinstance(size, Failure)
+        assert size.kind == "unavailable"
+        assert size.effect == "none"
 
 
 def test_a_count_over_the_output_limit_is_refused(kind: ClientKind) -> None:

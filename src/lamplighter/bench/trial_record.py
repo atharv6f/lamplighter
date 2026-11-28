@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Literal, get_args
 
-from lamplighter.ports import canonical_json, from_plain, read_saved_json
+from lamplighter.ports import JsonValue, canonical_json, from_plain, read_saved_json
 
 type InfraReason = Literal[
     "budget_reached",
@@ -44,6 +44,15 @@ _MODEL_OUTAGES: dict[str, InfraReason] = {
 }
 
 
+# The fields added to the record after its first form, as a record of that
+# form reads.
+_ADDED: dict[str, JsonValue] = {"models_called": [], "escalated": False}
+# A run ended by a reply the adapter's end checks refused, such as one with
+# call markup in its text, is the agent's fail: a server that garbles calls
+# must lower its config's pass rate, not leave the trial out as an outage.
+OUTPUT_FAULT = "model_output:"
+
+
 @dataclass(frozen=True, slots=True)
 class Tokens:
     """The four token counts of a run, added up over its replies."""
@@ -60,7 +69,9 @@ class TrialRecord:
 
     The two config ids are None when the trial stopped before its tools
     were built. `infra_reason` is set exactly when `gradable` is false, and
-    `left_out_of_bounds` only ever on a gradable trial.
+    `left_out_of_bounds` only ever on a gradable trial. `models_called` and
+    `escalated` are the run summary's; a record written before they were
+    kept reads as no model named and no escalation.
     """
 
     portable_config_id: str | None
@@ -81,6 +92,8 @@ class TrialRecord:
     micro_dollars: int | None
     ms: int
     exported_events: int | None
+    models_called: tuple[str, ...] = ()
+    escalated: bool = False
     v: int = 1
 
 
@@ -132,7 +145,10 @@ def read_record(text: str) -> TrialRecord | None:
     count below 0, or a reason that does not fit `gradable`, is not one.
     """
     try:
-        record = from_plain(TrialRecord, read_saved_json(text))
+        plain = read_saved_json(text)
+        record = from_plain(
+            TrialRecord, {**_ADDED, **plain} if isinstance(plain, dict) else plain
+        )
     except ValueError:
         return None
     if record.v != 1 or (record.infra_reason is None) != record.gradable:
@@ -155,6 +171,8 @@ def _run_reason(reason: str, detail: str | None) -> InfraReason | None:
     if reason in ("done", "limit"):
         return None
     if reason == "failed" and detail in _AGENTS_FAILURES:
+        return None
+    if reason == "failed" and detail is not None and detail.startswith(OUTPUT_FAULT):
         return None
     if reason == "failed" and detail in _MODEL_OUTAGES:
         return _MODEL_OUTAGES[detail]

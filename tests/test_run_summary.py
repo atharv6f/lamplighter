@@ -4,6 +4,7 @@ import re
 
 from lamplighter.core import DayReport, TokenCounts, run_summary
 from lamplighter.ports import Event, Failure, TextPart, Usage
+from tests.run_history import History
 from tests.span_kit import MadeUpLog, tool_call
 
 TIMEOUT = Failure(kind="timeout", effect="unknown", message="Made up.", source="t")
@@ -81,3 +82,87 @@ def test_a_run_that_has_not_ended_has_no_reason() -> None:
 
 def test_events_with_no_run_give_nothing() -> None:
     assert run_summary([]) is None
+
+
+def asked(history: History, name: str) -> None:
+    history.add("model_request", {"deadline_ms": 600_000, "model_name": name})
+
+
+def markup_failure() -> Failure:
+    return Failure(
+        kind="transient",
+        effect="none",
+        message="Made up.",
+        source="openai_chat",
+        detail={"model_output": "call_markup"},
+    )
+
+
+def test_the_models_asked_are_named_once_each_in_order() -> None:
+    history = History().start()
+    history.chose("local")
+    asked(history, "local")
+    history.reply(TextPart(text="Thinking."), reason="tool_calls")
+    asked(history, "local")
+    history.chose("frontier", 1, "model_failed")
+    asked(history, "frontier")
+    history.reply(TextPart(text="Done."))
+    history.end()
+    summary = run_summary(history.events)
+    assert summary is not None
+    assert summary.models_called == ("local", "frontier")
+    assert summary.escalated
+
+
+def test_a_choice_on_a_signal_with_no_request_after_it_is_no_escalation() -> None:
+    history = History().start()
+    history.chose("local")
+    asked(history, "local")
+    history.chose("frontier", 1, "too_large")
+    history.end("failed", "model_unavailable")
+    summary = run_summary(history.events)
+    assert summary is not None
+    assert summary.models_called == ("local",)
+    assert not summary.escalated
+
+
+def test_a_model_skipped_at_the_start_is_no_escalation() -> None:
+    history = History().start()
+    history.chose("frontier", 1, "skipped")
+    asked(history, "frontier")
+    history.end()
+    summary = run_summary(history.events)
+    assert summary is not None and not summary.escalated
+
+
+def test_a_later_escalation_is_found_after_an_earlier_request() -> None:
+    history = History().start()
+    history.chose("local")
+    asked(history, "local")
+    history.chose("middle", 1, "empty_reply")
+    asked(history, "local")
+    asked(history, "middle")
+    summary = run_summary(history.events)
+    assert summary is not None and summary.escalated
+
+
+def test_the_last_reply_s_output_fault_is_kept() -> None:
+    history = History().start()
+    history.chose("local")
+    asked(history, "local")
+    history.reply(error=markup_failure())
+    history.end("failed", "model_transient")
+    summary = run_summary(history.events)
+    assert summary is not None and summary.output_fault == "call_markup"
+    history = History().start()
+    asked(history, "local")
+    history.reply(error=markup_failure())
+    asked(history, "local")
+    history.reply(TextPart(text="Done."))
+    summary = run_summary(history.events)
+    assert summary is not None and summary.output_fault is None
+    history = History().start()
+    asked(history, "local")
+    history.reply(error=TIMEOUT)
+    summary = run_summary(history.events)
+    assert summary is not None and summary.output_fault is None

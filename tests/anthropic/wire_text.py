@@ -4,8 +4,8 @@ import json
 from typing import Any
 
 from lamplighter.adapters import ScriptedBreak, ScriptedReply
-from lamplighter.adapters.anthropic.sse import SseReader
 from lamplighter.adapters.anthropic.stream import ReplyAssembler
+from lamplighter.adapters.sse import SseReader
 from lamplighter.ports import (
     ModelEvent,
     ReasoningPart,

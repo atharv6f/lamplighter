@@ -6,6 +6,8 @@ import pytest
 
 from lamplighter.bench import (
     HARNESS,
+    ConfigLadder,
+    ConfigModel,
     NotWhole,
     RunSet,
     RunSetPlan,
@@ -14,7 +16,7 @@ from lamplighter.bench import (
     record_text,
     run_set,
 )
-from lamplighter.ports import RecordedTokens, TrialFacts
+from lamplighter.ports import RecordedTokens, TrialFacts, from_stored, to_plain
 from tests.bench.test_trial_record import RECORD
 
 PLAN = RunSetPlan(
@@ -28,8 +30,15 @@ PLAN = RunSetPlan(
     tasks=("beta", "alpha"),
     model="made-up-1",
     provider="made-up",
+    models=(
+        ConfigModel("local", "made-up-local"),
+        ConfigModel("frontier", "made-up-1"),
+    ),
+    ladders=(ConfigLadder("default", ("local", "frontier")),),
 )
-BASELINE = dataclasses.replace(PLAN, harness="made-up-baseline", portable_config_id="")
+BASELINE = dataclasses.replace(
+    PLAN, harness="made-up-baseline", portable_config_id="", models=(), ladders=()
+)
 FACTS = TrialFacts(
     task="alpha",
     runner_name="alpha__aaa",
@@ -52,7 +61,7 @@ def _facts(task: str, name: str, started_at: str) -> TrialFacts:
     )
 
 
-def _whole() -> list[TrialFacts]:
+def whole_trials() -> list[TrialFacts]:
     return [
         _facts(task, f"{task}__{n}", f"2026-11-27T10:00:0{n}+00:00")
         for task in ("alpha", "beta")
@@ -60,14 +69,14 @@ def _whole() -> list[TrialFacts]:
     ]
 
 
-def _built(plan: RunSetPlan, found: list[TrialFacts]) -> RunSet:
+def built_run_set(plan: RunSetPlan, found: list[TrialFacts]) -> RunSet:
     built = run_set(plan, found)
     assert isinstance(built, RunSet)
     return built
 
 
 def test_a_whole_run_set_has_the_plans_values_and_one_entry_per_trial() -> None:
-    built = _built(PLAN, _whole())
+    built = built_run_set(PLAN, whole_trials())
     assert (built.run_set, built.harness, built.harness_version) == (
         "made-up-run",
         HARNESS,
@@ -80,6 +89,7 @@ def test_a_whole_run_set_has_the_plans_values_and_one_entry_per_trial() -> None:
         3,
     )
     assert (built.model, built.provider) == ("made-up-1", "made-up")
+    assert (built.models, built.ladders) == (PLAN.models, PLAN.ladders)
     assert [(t.task, t.attempt) for t in built.trials] == [
         ("alpha", 1),
         ("alpha", 2),
@@ -100,7 +110,7 @@ def test_attempts_follow_the_start_as_a_point_in_time_and_not_as_text() -> None:
         _facts("alpha", "alpha__c", "2026-11-27T10:15:00.500000+00:00"),
     ]
     plan = dataclasses.replace(PLAN, tasks=("alpha",))
-    built = _built(plan, found)
+    built = built_run_set(plan, found)
     assert [(t.runner_name, t.attempt) for t in built.trials] == [
         ("alpha__a", 1),
         ("alpha__c", 2),
@@ -116,7 +126,7 @@ def test_a_tie_in_start_is_broken_by_the_runners_name() -> None:
         _facts("alpha", "alpha__yy", "2026-11-27T09:00:00+00:00"),
     ]
     plan = dataclasses.replace(PLAN, tasks=("alpha",))
-    built = _built(plan, found)
+    built = built_run_set(plan, found)
     assert [t.runner_name for t in built.trials] == [
         "alpha__yy",
         "alpha__xx",
@@ -125,17 +135,17 @@ def test_a_tie_in_start_is_broken_by_the_runners_name() -> None:
 
 
 def test_a_task_with_a_trial_missing_is_not_whole() -> None:
-    found = _whole()[:-1]
+    found = whole_trials()[:-1]
     assert run_set(PLAN, found) == NotWhole((TaskCount("beta", 2),), ())
 
 
 def test_a_task_with_no_trial_is_not_whole() -> None:
-    found = [f for f in _whole() if f.task == "alpha"]
+    found = [f for f in whole_trials() if f.task == "alpha"]
     assert run_set(PLAN, found) == NotWhole((TaskCount("beta", 0),), ())
 
 
 def test_a_task_with_a_trial_too_many_is_not_whole() -> None:
-    found = [*_whole(), _facts("alpha", "alpha__9", "2026-11-27T11:00:00+00:00")]
+    found = [*whole_trials(), _facts("alpha", "alpha__9", "2026-11-27T11:00:00+00:00")]
     assert run_set(PLAN, found) == NotWhole((TaskCount("alpha", 4),), ())
 
 
@@ -143,11 +153,13 @@ def test_a_trial_of_a_task_not_planned_is_not_whole() -> None:
     extra = [
         _facts("gamma", f"gamma__{n}", f"2026-11-27T11:00:0{n}+00:00") for n in range(3)
     ]
-    assert run_set(PLAN, [*_whole(), *extra]) == NotWhole((TaskCount("gamma", 3),), ())
+    assert run_set(PLAN, [*whole_trials(), *extra]) == NotWhole(
+        (TaskCount("gamma", 3),), ()
+    )
 
 
 def test_trials_of_two_harness_versions_are_not_one_run_set() -> None:
-    found = _whole()
+    found = whole_trials()
     found[0] = dataclasses.replace(found[0], harness_version="2.0")
     assert run_set(PLAN, found) == NotWhole((), ("1.0", "2.0"))
 
@@ -159,13 +171,39 @@ def test_no_trials_at_all_are_not_whole() -> None:
 
 
 def test_a_harness_trials_numbers_are_its_records() -> None:
-    built = _built(PLAN, _whole())
+    built = built_run_set(PLAN, whole_trials())
     first = built.trials[0]
     assert (first.outcome, first.reason, first.run_reason) == ("pass", None, "done")
     assert (first.steps, first.tool_calls) == (2, 1)
     assert (first.tokens, first.micro_dollars) == (Tokens(10, 20, 30, 40), 1_234)
     # The time is the job runner's, which the record's is not.
     assert (first.ms, first.task_folder_hash) == (60_000, "h" * 64)
+    assert (first.models_called, first.escalated) == ((), False)
+
+
+def test_a_harness_trial_names_the_models_its_run_asked() -> None:
+    found = whole_trials()
+    moved = dataclasses.replace(
+        RECORD, models_called=("local", "frontier"), escalated=True
+    )
+    found[0] = dataclasses.replace(found[0], record=record_text(moved))
+    first, second = built_run_set(PLAN, found).trials[:2]
+    assert (first.models_called, first.escalated) == (("local", "frontier"), True)
+    assert (second.models_called, second.escalated) == ((), False)
+
+
+def test_a_run_set_kept_before_its_models_were_named_reads_with_none() -> None:
+    plain = to_plain(built_run_set(PLAN, whole_trials()))
+    assert isinstance(plain, dict)
+    del plain["models"], plain["ladders"]
+    trials = plain["trials"]
+    assert isinstance(trials, list)
+    for trial in trials:
+        assert isinstance(trial, dict)
+        del trial["models_called"], trial["escalated"]
+    found = from_stored(RunSet, plain)
+    assert (found.models, found.ladders) == ((), ())
+    assert {(t.models_called, t.escalated) for t in found.trials} == {((), False)}
 
 
 @pytest.mark.parametrize(
@@ -179,9 +217,9 @@ def test_a_harness_trials_numbers_are_its_records() -> None:
 def test_a_harness_trial_with_no_record_that_can_be_read_is_no_record(
     record: str | None,
 ) -> None:
-    found = _whole()
+    found = whole_trials()
     found[0] = dataclasses.replace(found[0], record=record)
-    first = _built(PLAN, found).trials[0]
+    first = built_run_set(PLAN, found).trials[0]
     assert (first.outcome, first.reason, first.run_reason) == (
         "infra",
         "no_record",
@@ -192,9 +230,11 @@ def test_a_harness_trial_with_no_record_that_can_be_read_is_no_record(
 
 
 def test_a_baseline_is_judged_by_its_check_and_counted_by_the_job_runner() -> None:
-    found = [dataclasses.replace(f, record=None, check="failed") for f in _whole()]
+    found = [
+        dataclasses.replace(f, record=None, check="failed") for f in whole_trials()
+    ]
     found[0] = dataclasses.replace(found[0], check="passed", tokens=None)
-    built = _built(BASELINE, found)
+    built = built_run_set(BASELINE, found)
     assert built.portable_config_id == ""
     first, second = built.trials[:2]
     assert (first.outcome, first.reason, first.run_reason) == ("pass", None, None)
@@ -207,7 +247,9 @@ def test_a_baseline_never_reads_a_record() -> None:
     stopped = dataclasses.replace(
         RECORD, gradable=False, infra_reason="harness_failure"
     )
-    found = [dataclasses.replace(f, record=record_text(stopped)) for f in _whole()]
-    built = _built(BASELINE, found)
+    found = [
+        dataclasses.replace(f, record=record_text(stopped)) for f in whole_trials()
+    ]
+    built = built_run_set(BASELINE, found)
     assert {t.outcome for t in built.trials} == {"pass"}
     assert {t.steps for t in built.trials} == {0}

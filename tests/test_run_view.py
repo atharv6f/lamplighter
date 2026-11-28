@@ -4,7 +4,14 @@ import dataclasses
 
 import pytest
 
-from lamplighter.core.run_view import CallRecord, RunView, call_key, view_of
+from lamplighter.core.harness_texts import with_repeat_warning
+from lamplighter.core.run_view import (
+    CallRecord,
+    RouteFact,
+    RunView,
+    call_key,
+    view_of,
+)
 from lamplighter.ports import Event, Failure, TextPart, Usage
 from tests.run_history import CONFIG, History, call, unparsed
 
@@ -253,3 +260,107 @@ def test_an_intent_whose_class_is_not_a_text_does_not_fit() -> None:
     made = view_of(history.events)
     assert isinstance(made, Failure)
     assert made.kind == "fatal"
+
+
+def test_a_run_with_no_choice_yet_has_no_route_and_no_signal() -> None:
+    history = History().start()
+    made = view(history)
+    assert (made.route, made.signal) == (None, None)
+
+
+def test_the_last_choice_of_the_run_is_its_route() -> None:
+    history = History().start()
+    history.chose("local", 0)
+    history.step_with(TextPart(text="Empty enough."), reason="end")
+    moved = history.chose("frontier", 1, "empty_reply")
+    made = view(history)
+    assert made.route == RouteFact("default", "frontier", 1, moved.seq)
+    assert made.last_reply is not None
+    assert made.last_reply.seq == moved.seq - 1
+
+
+def test_a_choice_in_an_ended_run_is_not_the_open_run_s_route() -> None:
+    history = History().start()
+    history.chose("frontier", 1, "too_large")
+    history.answered()
+    history.start(native_id="m2", run_id="run-2")
+    assert view(history).route is None
+
+
+def test_a_signal_before_the_last_choice_does_not_stand_after_it() -> None:
+    history = History().start()
+    history.chose("local", 0)
+    for name in ("call_a", "call_b"):
+        history.result(call(name), "Made-up answer.", harness="unknown_tool")
+    before = view(history)
+    assert before.signal == "invalid_calls"
+    history.chose("frontier", 1, "invalid_calls")
+    assert view(history).signal is None
+    history.result(call("call_c"), with_repeat_warning("Waited 1 seconds."))
+    assert view(history).signal == "repeated_call"
+
+
+def test_the_bad_streak_starts_again_at_a_choice() -> None:
+    history = History().start()
+    history.chose("local", 0)
+    history.step_with(reason="end")
+    history.step_with(reason="end")
+    assert view(history).bad_streak == 2
+    history.chose("frontier", 1, "empty_reply")
+    assert view(history).bad_streak == 0
+    history.step_with(reason="end")
+    assert view(history).bad_streak == 1
+
+
+def test_a_choice_whose_position_is_not_a_whole_number_is_refused() -> None:
+    history = History().start()
+    chosen = history.chose()
+    history.events[-1] = dataclasses.replace(
+        chosen, payload={**chosen.payload, "position": "0"}
+    )
+    made = view_of(history.events)
+    assert isinstance(made, Failure)
+    assert made.kind == "fatal"
+
+
+def test_a_session_is_private_once_any_of_its_runs_was() -> None:
+    history = History().start(private=True)
+    history.answered()
+    history.start(native_id="m2", run_id="run-2", private=False)
+    assert view(history).session_private
+    history.answered()
+    assert view(history).session_private
+
+
+def test_a_session_with_only_ordinary_runs_is_not_private() -> None:
+    history = History().start()
+    history.answered()
+    history.start(native_id="m2", run_id="run-2")
+    assert not view(history).session_private
+    assert not view(History()).session_private
+
+
+def test_the_session_size_is_the_last_reply_with_a_split_prompt_plus_its_output() -> (
+    None
+):
+    history = History().start()
+    assert view(history).session_size is None
+    history.request()
+    whole = Usage(input_uncached=1_000, cache_read=30_000, cache_write=500, output=200)
+    history.reply(TextPart(text="One."), usage=whole)
+    history.ready()
+    history.end()
+    # The size carries over into the next run of the session.
+    history.start(native_id="m2", run_id="run-2")
+    assert view(history).session_size == 31_700
+    history.request()
+    unsplit = Usage(input_uncached=None, cache_read=None, cache_write=None, output=9)
+    history.reply(call("call_a"), reason="tool_calls", usage=unsplit)
+    history.request()
+    history.reply(call("call_b"), reason="tool_calls")
+    # Neither of the newer replies splits its prompt, so the older one stands.
+    assert view(history).session_size == 31_700
+    history.request()
+    newer = Usage(input_uncached=40, cache_read=0, cache_write=0, output=None)
+    history.reply(TextPart(text="Two."), usage=newer)
+    assert view(history).session_size == 40

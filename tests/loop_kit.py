@@ -34,7 +34,7 @@ from lamplighter.ports import (
     ToolSpec,
 )
 from tests.model_by_request import Choose
-from tests.run_history import SESSION, stop
+from tests.run_history import MODEL_NAME, SESSION, stop
 from tests.stub_tools import StubTools
 from tests.waiting_clock import JumpingClock
 
@@ -64,7 +64,8 @@ class Loop:
             log=self.log,
             inbox=self.inbox,
             outbox=self.outbox,
-            model=self.model,
+            models={MODEL_NAME: self.model},
+            health={},
             tools=self.tools,
             ledger=self.ledger,
             blobs=self.blobs,

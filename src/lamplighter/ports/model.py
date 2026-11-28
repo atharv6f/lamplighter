@@ -191,7 +191,11 @@ class ModelProfile:
 
     `cache_hints` is how many hints a request may carry, and 0 means hints are
     ignored. `count_error_permille` is how far `count_tokens` may be from the
-    real prompt size, in thousandths of that size.
+    real prompt size, in thousandths of that size. `window` is the largest
+    prompt plus output the model takes, in tokens. `concurrent_requests` is
+    how many requests the server runs at once. `stays_on_mac` says every
+    byte of a call goes only to this Mac. The settings loader works it out
+    from the adapter and its address, and never reads it from a setting.
     """
 
     adapter: str
@@ -200,6 +204,9 @@ class ModelProfile:
     tool_calls: bool
     cache_hints: int
     count_error_permille: int
+    window: int
+    concurrent_requests: int
+    stays_on_mac: bool
 
 
 class ModelClient(Protocol):

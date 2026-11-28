@@ -21,7 +21,12 @@ FIXED_PROGRAMS = {
     "app/git_output.py": {"git"},
     "adapters/harbor_jobs/leftovers.py": {"docker"},
     "adapters/harbor_jobs/runner.py": {"/bin/sh"},
+    "adapters/openai_chat/port_owner.py": {"/usr/sbin/lsof", "/bin/ps"},
+    "app/memory_watch.py": {"/usr/sbin/lsof"},
+    "app/keep_awake.py": {"/usr/bin/caffeinate"},
 }
+# The starts whose first word can be read: a list written in the call.
+NAMED_STARTS = {"subprocess.run", "subprocess.Popen"}
 OS_STARTS = {"fork", "forkpty", "posix_spawn", "posix_spawnp", "system", "popen"}
 
 
@@ -55,7 +60,7 @@ def sources() -> dict[str, ast.AST]:
 
 
 def programs_started(tree: ast.AST) -> list[str | None]:
-    """Give the program of each `subprocess.run`, by its first word, or None.
+    """Give the program of each `subprocess.run` or `Popen`, by its first word.
 
     A first word that is not written in the code, such as a variable, is
     None, and so is a start of any other kind.
@@ -69,7 +74,7 @@ def programs_started(tree: ast.AST) -> list[str | None]:
             ("os.exec", "os.spawn")
         )
         if name.startswith(("subprocess.", "asyncio.create_subprocess")) or starts_os:
-            found.append(_first_word(node) if name == "subprocess.run" else None)
+            found.append(_first_word(node) if name in NAMED_STARTS else None)
     return found
 
 
@@ -122,7 +127,9 @@ def test_the_checks_see_an_import_and_a_call_written_each_way() -> None:
         "subprocess.run(['git', 'status'])\n"
         "subprocess.run([program, 'x'])\n"
         "subprocess.Popen(['git'])\n"
+        "subprocess.Popen([program])\n"
+        "subprocess.call(['git'])\n"
         "os.system('git')\n"
         "os.path.realpath('git')\n"
     )
-    assert programs_started(starts) == ["git", None, None, None]
+    assert programs_started(starts) == ["git", None, "git", None, None, None]

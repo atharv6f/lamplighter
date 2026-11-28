@@ -15,7 +15,7 @@ from pathlib import Path
 
 from lamplighter.adapters import ScriptedChannel
 from lamplighter.adapters.sqlite import SqliteEventLog, SqliteInbox, SqliteOutbox
-from lamplighter.core import deliver_due, rebuild_messages, run_turn
+from lamplighter.core import UPCASTERS, deliver_due, rebuild_messages, run_turn
 from lamplighter.core.next_move import AnswerCall, RunCall, next_move
 from lamplighter.core.run_view import RunView, view_of
 from lamplighter.ports import Event, EventLog, Failure, Inbox, Outbox
@@ -53,7 +53,7 @@ def frozen(tmp_path: Path) -> sqlite3.Connection:
 
 def stores(connection: sqlite3.Connection) -> tuple[EventLog, Inbox, Outbox]:
     return (
-        SqliteEventLog(connection, {}, LIMIT),
+        SqliteEventLog(connection, UPCASTERS, LIMIT),
         SqliteInbox(connection, LIMIT),
         SqliteOutbox(connection, FakeClock(), LIMIT),
     )
@@ -90,7 +90,9 @@ def test_the_frozen_version_2_store_reads_back_what_its_rows_hold(
 ) -> None:
     connection = frozen(tmp_path)
     assert connection.execute("PRAGMA user_version").fetchone() == (2,)
-    log, inbox, _ = stores(connection)
+    _, inbox, _ = stores(connection)
+    # Read row for row, so without the upcasters the loop reads it with.
+    log = SqliteEventLog(connection, {}, LIMIT)
     every: list[Event] = []
     for session in ("sess-a", "sess-b"):
         read = run(log.read(session, 0))

@@ -5,8 +5,8 @@ from typing import Any
 
 from lamplighter.adapters.anthropic.blocks import reasoning_part, tool_call_part
 from lamplighter.adapters.anthropic.errors import failure, failure_in_stream
-from lamplighter.adapters.anthropic.sse import SseEvent
-from lamplighter.adapters.anthropic.wire import (
+from lamplighter.adapters.sse import SseEvent
+from lamplighter.adapters.wire_json import (
     Unreadable,
     as_object,
     object_or_empty,

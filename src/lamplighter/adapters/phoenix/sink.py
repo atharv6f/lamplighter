@@ -13,7 +13,7 @@ from typing import cast
 
 import httpx
 
-from lamplighter.adapters.phoenix.local_address import local_address
+from lamplighter.adapters.loopback_address import local_address
 from lamplighter.adapters.phoenix.otlp import encoded
 from lamplighter.ports import Clock, Failure, FailureEffect, FailureKind, Span
 

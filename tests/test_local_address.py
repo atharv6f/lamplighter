@@ -1,8 +1,8 @@
-"""The one form of Phoenix's address that stays on this Mac, row by row."""
+"""The one form of an address that stays on this Mac, row by row."""
 
 import pytest
 
-from lamplighter.adapters.phoenix import local_address
+from lamplighter.adapters import local_address
 
 PASSES = {
     "http://127.0.0.1:6006": "http://127.0.0.1:6006",

@@ -4,6 +4,7 @@ from typing import Any, cast
 import pytest
 
 from lamplighter.core import Reply, rebuild_messages
+from lamplighter.core.event_types import READ_VERSION
 from lamplighter.core.harness_texts import EMPTY_REPLY_NOTE, run_end_note
 from lamplighter.ports import (
     ErrorEvent,
@@ -38,14 +39,15 @@ REFUSED = StopEvent(
 EMPTY = TextPart(text=EMPTY_REPLY_NOTE)
 
 
-def event(seq: int, kind: str, payload: Any, v: int = 1) -> Event:
+def event(seq: int, kind: str, payload: Any, v: int | None = None) -> Event:
+    """Give an event at the version this code writes, unless told another."""
     return Event(
         session_id="sess-a",
         seq=seq,
         pos=seq,
         event_id=event_id_for("sess-a", seq),
         type=kind,
-        v=v,
+        v=READ_VERSION.get(kind, 1) if v is None else v,
         payload=cast(JsonObject, payload),
         at=AT,
         run_id=None,
@@ -181,7 +183,7 @@ def test_a_saved_payload_with_a_field_this_code_does_not_know_still_reads() -> N
     [
         mark(2, "some_later_type"),
         event(2, "user_message", {"text": "x"}, v=2),
-        event(2, "run_started", {"config_id": "c", "trigger": "message"}, v=2),
+        event(2, "run_started", {"config_id": "c", "trigger": "message"}, v=3),
     ],
     ids=[
         "a type this code does not read",

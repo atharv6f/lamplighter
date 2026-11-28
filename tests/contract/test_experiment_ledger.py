@@ -12,7 +12,12 @@ from lamplighter.adapters import FileLedger
 from lamplighter.adapters.in_memory import InMemoryLedger
 from lamplighter.ports import ExperimentLedger, Failure, LedgerRow
 from tests.ledger_kit import (
+    BAKEOFF_RULE,
     CANDIDATE_ID,
+    bakeoff_candidate,
+    bakeoff_choice,
+    bakeoff_rule,
+    bakeoff_soak,
     correction,
     decision,
     loose,
@@ -98,6 +103,9 @@ def test_rows_come_back_in_the_order_they_were_added(book: ExperimentLedger) -> 
         lambda: dataclasses.replace(
             plan(), body=dataclasses.replace(plan().body, rule={"alpha": 0.05})
         ),
+        lambda: dataclasses.replace(bakeoff_rule(), experiment="made-up"),
+        lambda: dataclasses.replace(bakeoff_rule(), config_ids=("one",)),
+        lambda: bakeoff_rule(rule_hash="not-a-hash"),
     ],
 )
 def test_a_row_not_of_the_books_shape_is_refused(
@@ -212,3 +220,96 @@ def test_a_decision_with_no_rule_hash_is_refused(book: ExperimentLedger) -> None
     bare = decision()
     body = dataclasses.replace(bare.body, decision={"outcome": "keep"})
     refused(book, dataclasses.replace(bare, body=body), "invalid_input")
+
+
+NEW_RULE = "2" * 64
+NEW_CAPTURE = "3" * 64
+
+
+def test_a_whole_bake_off_comes_back_as_it_was_added(book: ExperimentLedger) -> None:
+    every = [
+        bakeoff_rule(),
+        bakeoff_candidate("llama.cpp"),
+        bakeoff_candidate("mlx-lm"),
+        bakeoff_soak(False, "llama.cpp"),
+        bakeoff_soak(True, "mlx-lm"),
+        bakeoff_choice("mlx-lm"),
+    ]
+    added(book, *every)
+    assert list(rows(book)) == every
+
+
+def test_a_first_rule_row_replaces_none(book: ExperimentLedger) -> None:
+    refused(book, bakeoff_rule(replaces=NEW_RULE, why="Made up."), "invalid_input")
+    added(book, bakeoff_rule())
+
+
+def test_a_second_rule_row_names_the_latest_and_says_why(
+    book: ExperimentLedger,
+) -> None:
+    added(book, bakeoff_rule())
+    refused(book, bakeoff_rule(NEW_RULE), "invalid_input")
+    refused(book, bakeoff_rule(NEW_RULE, replaces=BAKEOFF_RULE), "invalid_input")
+    refused(book, bakeoff_rule(NEW_RULE, NEW_RULE, "Made up."), "invalid_input")
+    added(book, bakeoff_rule(NEW_RULE, BAKEOFF_RULE, "The limit was lower."))
+    # The first is no longer the latest.
+    third = "3" * 64
+    refused(book, bakeoff_rule(third, BAKEOFF_RULE, "Made up."), "invalid_input")
+    added(book, bakeoff_rule(third, NEW_RULE, "Made up."))
+
+
+@pytest.mark.parametrize("measured", [bakeoff_candidate, bakeoff_soak])
+def test_a_measured_row_is_under_the_latest_rule_and_its_capture_set(
+    book: ExperimentLedger, measured: Callable[..., LedgerRow]
+) -> None:
+    refused(book, measured(), "invalid_input")
+    added(book, bakeoff_rule())
+    refused(book, measured(capture="f" * 64), "invalid_input")
+    refused(book, measured(rule_hash=NEW_RULE), "invalid_input")
+    added(book, measured())
+    added(book, bakeoff_rule(NEW_RULE, BAKEOFF_RULE, "Made up."))
+    refused(book, measured(), "invalid_input")
+    added(book, measured(rule_hash=NEW_RULE))
+
+
+def test_a_chosen_winner_has_a_passing_soak_under_the_same_rule(
+    book: ExperimentLedger,
+) -> None:
+    added(book, bakeoff_rule(), bakeoff_candidate(), bakeoff_candidate("mlx-lm"))
+    refused(book, bakeoff_choice(), "invalid_input")
+    added(book, bakeoff_soak(False))
+    refused(book, bakeoff_choice(), "invalid_input")
+    added(book, bakeoff_soak(True, "mlx-lm"))
+    refused(book, bakeoff_choice(), "invalid_input")
+    refused(book, bakeoff_choice("mlx-lm", "made-up-35b"), "invalid_input")
+    other = bakeoff_choice("mlx-lm")
+    weights = dataclasses.replace(other.body, weights_sha256="9" * 64)
+    refused(book, dataclasses.replace(other, body=weights), "invalid_input")
+    refused(book, bakeoff_choice("mlx-lm", rule_hash=NEW_RULE), "invalid_input")
+    added(book, bakeoff_choice("mlx-lm"))
+
+
+def test_a_choice_of_none_needs_no_soak(book: ExperimentLedger) -> None:
+    added(book, bakeoff_rule(), bakeoff_choice(""))
+
+
+def test_a_soak_under_an_earlier_rule_does_not_choose_under_a_new_one(
+    book: ExperimentLedger,
+) -> None:
+    added(book, bakeoff_rule(), bakeoff_soak())
+    added(book, bakeoff_rule(NEW_RULE, BAKEOFF_RULE, "Made up."))
+    refused(book, bakeoff_choice(rule_hash=NEW_RULE), "invalid_input")
+    # A choice under the earlier rule is not under the latest one.
+    refused(book, bakeoff_choice(), "invalid_input")
+    added(book, bakeoff_choice("", rule_hash=NEW_RULE))
+
+
+def test_a_soak_on_an_earlier_capture_set_does_not_choose_on_a_new_one(
+    book: ExperimentLedger,
+) -> None:
+    # The same rule, replaced only to take a new capture set.
+    added(book, bakeoff_rule(), bakeoff_soak())
+    added(book, bakeoff_rule(BAKEOFF_RULE, BAKEOFF_RULE, "Made up.", NEW_CAPTURE))
+    refused(book, bakeoff_choice(capture=NEW_CAPTURE), "invalid_input")
+    added(book, bakeoff_soak(capture=NEW_CAPTURE))
+    added(book, bakeoff_choice(capture=NEW_CAPTURE))

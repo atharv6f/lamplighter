@@ -134,3 +134,20 @@ def test_the_texts_of_a_cut_result_are_pinned() -> None:
         " The full output could not be saved (unavailable), so it cannot be read"
         " later.]"
     )
+
+
+def test_the_notices_for_no_model_are_pinned() -> None:
+    assert texts.no_model_notice(("local", "frontier")) == (
+        "No model in the settings is answering: local, frontier. Check that the"
+        " model servers are running and send your message again."
+    )
+    assert texts.private_no_model_notice(("local",)) == (
+        "This session is private, so it only uses models on this Mac, and none of"
+        " them is answering: local. Nothing was sent off this Mac. Start the local"
+        " model server and send your message again."
+    )
+    assert texts.no_model_notice(()) == (
+        "No model in the settings is answering: none. Check that the model servers"
+        " are running and send your message again."
+    )
+    assert "answering: none." in texts.private_no_model_notice(())

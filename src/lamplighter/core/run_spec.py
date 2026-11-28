@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from lamplighter.core.cost import Prices
+from lamplighter.core.route_table import NamedModel, Route
 from lamplighter.ports import JsonObject
 
 
@@ -36,9 +36,13 @@ class RunSpec:
     millionths of a dollar. `model_deadline_ms` bounds one model call with
     its retries, and `cancel_bound_ms` is how long a call that is being cut
     short gets to stop. `wall` is the executor's record of its wall, saved
-    on `run_started` too, because the hash cannot be read back. `model` and
-    `provider` are the names from the model settings, saved on each model
-    request, so a call that gets no reply still says which model was asked.
+    on `run_started` too, because the hash cannot be read back.
+
+    `models` are the model entries of the settings, each with its profile
+    and its prices, and `routes` the rule table, in the order of the file.
+    `private` says the run may use only models whose calls stay on this
+    Mac; it is in the full config id, so a run that was not private is
+    never carried on as one.
 
     `portable_config_id` names the same settings on any machine, without
     the wall and the folders, and `code_revision` names the code that runs:
@@ -50,8 +54,9 @@ class RunSpec:
     config_id: str
     portable_config_id: str
     code_revision: str
-    model: str
-    provider: str
+    models: tuple[NamedModel, ...]
+    routes: tuple[Route, ...]
+    private: bool
     system: str
     max_steps: int
     max_seconds: int
@@ -61,5 +66,8 @@ class RunSpec:
     model_deadline_ms: int
     model_retries: int
     cancel_bound_ms: int
-    prices: Prices
     wall: JsonObject
+
+    def model(self, name: str) -> NamedModel:
+        """Give the model entry of this name. The settings name each one once."""
+        return next(entry for entry in self.models if entry.name == name)

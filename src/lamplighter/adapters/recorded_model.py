@@ -24,7 +24,7 @@ from lamplighter.ports import (
     to_plain,
 )
 
-_VERSION = 1
+_VERSION = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,9 +115,13 @@ class ReplayedModel:
         killed in the middle of writing a line leaves such a line.
         """
         first, *rest = path.read_text().splitlines()
-        header = from_plain(_Header, json.loads(first))
-        if header.v != _VERSION:
-            raise ValueError(f"this recording has version {header.v}, not {_VERSION}")
+        plain: JsonValue = json.loads(first)
+        # The version is read before the rest, because another version's
+        # profile may have other fields.
+        version = plain.get("v") if isinstance(plain, dict) else None
+        if version != _VERSION:
+            raise ValueError(f"this recording has version {version}, not {_VERSION}")
+        header = from_plain(_Header, plain)
         self._profile = header.profile
         self._calls = iter([_read_call(line) for line in rest])
 

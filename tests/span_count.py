@@ -15,7 +15,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 from pathlib import Path
 
-from lamplighter.adapters.phoenix import local_address
+from lamplighter.adapters import local_address
 from lamplighter.adapters.sqlite import SqliteEventLog, open_database
 from lamplighter.app.config import load_config
 from lamplighter.ports import Event, Failure

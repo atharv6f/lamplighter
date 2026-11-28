@@ -2,7 +2,8 @@
 
 from typing import Any, cast
 
-from lamplighter.core import Prices, Reply
+from lamplighter.core import NamedModel, Prices, Reply, Route
+from lamplighter.core.event_types import READ_VERSION
 from lamplighter.core.run_spec import RunSpec
 from lamplighter.ports import (
     ErrorEvent,
@@ -25,6 +26,7 @@ from lamplighter.ports import (
     to_plain,
 )
 from tests.fake_clock import FakeClock
+from tests.model_samples import PROFILE
 from tests.stub_tools import StubTools
 
 AT = "2026-11-26T07:35:12.345Z"
@@ -39,12 +41,15 @@ PRICES = Prices(
     cache_write=5_000_000,
     output=20_000_000,
 )
+# The one model entry of the made-up settings, and its route.
+MODEL_NAME = "made-up"
 SPEC = RunSpec(
     config_id=CONFIG,
     portable_config_id=PORTABLE,
     code_revision=REVISION,
-    model="made-up-1",
-    provider="made-up",
+    models=(NamedModel(MODEL_NAME, PROFILE, PRICES),),
+    routes=(Route("default", "always", (MODEL_NAME,)),),
+    private=False,
     system="You are a made-up helper.",
     max_steps=40,
     max_seconds=1_200,
@@ -54,7 +59,6 @@ SPEC = RunSpec(
     model_deadline_ms=600_000,
     model_retries=2,
     cancel_bound_ms=800,
-    prices=PRICES,
     wall=WALL,
 )
 TOOLS: dict[str, ToolEntry] = {
@@ -131,7 +135,7 @@ class History:
             pos=seq,
             event_id=event_id or event_id_for(self.session, seq),
             type=kind,
-            v=1,
+            v=READ_VERSION.get(kind, 1),
             payload=cast(JsonObject, payload),
             at=AT,
             run_id=None if kind == "session_started" else self.run_id,
@@ -148,11 +152,13 @@ class History:
         native_id: str = "m1",
         run_id: str = "run-1",
         config_id: str = CONFIG,
+        private: bool = False,
     ) -> "History":
         if not self.events:
             self.add("session_started", {"channel": "terminal", "conversation": "s"})
         self.run_id, self.step = run_id, None
-        self.add("run_started", {"config_id": config_id, "trigger": "message"})
+        started = {"config_id": config_id, "trigger": "message", "private": private}
+        self.add("run_started", started)
         self.said(text, native_id)
         return self
 
@@ -161,6 +167,27 @@ class History:
             "user_message",
             {"text": text},
             event_id=inbound_event_id("terminal", native_id),
+        )
+
+    def chose(
+        self,
+        model: str = MODEL_NAME,
+        position: int = 0,
+        reason: str = "start",
+        route_id: str = "default",
+    ) -> Event:
+        """Save the run's choice of model, as the route step writes it."""
+        return self.add(
+            "route_decided",
+            {
+                "route_id": route_id,
+                "model": model,
+                "position": position,
+                "reason": reason,
+                "private": False,
+                "size": None,
+                "health": {},
+            },
         )
 
     def request(self) -> Event:

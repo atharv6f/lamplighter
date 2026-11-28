@@ -17,8 +17,10 @@ from lamplighter.adapters.builtin_tools import ToolSettings
 from lamplighter.adapters.container import AsRoot, ContainerExecutor
 from lamplighter.app.chat import Stores, Tooling, check_schemas, run_spec
 from lamplighter.app.config import Config, load_config
+from lamplighter.app.model_set import ModelSet
 from lamplighter.app.work_bounds import out_of_bounds
 from lamplighter.bench import (
+    OUTPUT_FAULT,
     BoundWord,
     InfraReason,
     Tokens,
@@ -45,7 +47,6 @@ from lamplighter.ports import (
     Failure,
     IdSource,
     Inbound,
-    ModelClient,
     Sender,
     ToolProvider,
     utc_text,
@@ -92,14 +93,6 @@ class TrialStore:
 
 
 @dataclass(frozen=True)
-class TrialModel:
-    """The model client of one trial, and how to close what it holds open."""
-
-    client: ModelClient
-    close: Callable[[], Awaitable[None]]
-
-
-@dataclass(frozen=True)
 class TrialParts:
     """What a trial is built from beside its request. A test gives its own.
 
@@ -112,7 +105,7 @@ class TrialParts:
     open_store: Callable[[Path, Config], TrialStore | Failure]
     executor: Callable[[AsRoot, tuple[int, int], Path], ContainerExecutor]
     tools: Callable[[ToolSettings, BlobStore, Executor], ToolProvider]
-    model: Callable[[Config], TrialModel]
+    models: Callable[[Config], ModelSet]
 
 
 @dataclass(frozen=True)
@@ -120,7 +113,7 @@ class _Built:
     store: TrialStore
     executor: ContainerExecutor
     tooling: Tooling
-    model: TrialModel
+    models: ModelSet
 
 
 async def run_trial(parts: TrialParts, request: TrialRequest) -> TrialRecord:
@@ -145,7 +138,7 @@ async def run_trial(parts: TrialParts, request: TrialRequest) -> TrialRecord:
         try:
             record = await _with_built(parts, request, config, built, began)
         finally:
-            await built.model.close()
+            await built.models.close()
     finally:
         store.stores.close()
     return _written(harness, record)
@@ -187,7 +180,7 @@ def _build(
     executor = parts.executor(request.as_root, request.user, work)
     tools = parts.tools(config.tools, store.stores.blobs, executor)
     check_schemas(tools)
-    return _Built(store, executor, Tooling(tools, executor), parts.model(config))
+    return _Built(store, executor, Tooling(tools, executor), parts.models(config))
 
 
 async def _with_built(
@@ -197,7 +190,7 @@ async def _with_built(
     built: _Built,
     began: float,
 ) -> TrialRecord:
-    spec = run_spec(config, built.tooling, parts.code_revision)
+    spec = run_spec(config, built.tooling, parts.code_revision, private=False)
     if not await built.executor.mark():
         return _stopped(parts, config, spec, "executor_unavailable", began)
     planned = (request.planned_portable_id, request.planned_revision)
@@ -209,7 +202,7 @@ async def _with_built(
     summary = None if isinstance(events, Failure) else run_summary(events)
     ends = TrialEnds(
         run_reason=None if ended is None or summary is None else summary.reason,
-        run_detail=None if summary is None else summary.detail,
+        run_detail=_graded_detail(summary),
         command_unavailable=built.executor.broken is not None,
         swept=swept,
         exported=True,
@@ -262,7 +255,8 @@ async def _one_run(
         log=stores.log,
         inbox=stores.inbox,
         outbox=stores.outbox,
-        model=built.model.client,
+        models=built.models.clients,
+        health=built.models.health,
         tools=built.tooling.tools,
         ledger=stores.ledger,
         blobs=stores.blobs,
@@ -303,12 +297,14 @@ def _record(
         portable_config_id=None if spec is None else spec.portable_config_id,
         config_id=None if spec is None else spec.config_id,
         code_revision=parts.code_revision,
-        model=config.model.model,
-        provider=config.model.adapter,
+        model=config.default_model().profile.model,
+        provider=config.default_model().profile.adapter,
         session_id=SESSION,
         run_id=None if summary is None else summary.run_id,
         run_reason=None if summary is None else summary.reason,
-        run_detail=None if summary is None else summary.detail,
+        run_detail=_graded_detail(summary),
+        models_called=() if summary is None else summary.models_called,
+        escalated=False if summary is None else summary.escalated,
         gradable=reason is None,
         infra_reason=reason,
         left_out_of_bounds=left,
@@ -319,6 +315,17 @@ def _record(
         ms=int((parts.clock.monotonic() - began) * 1000),
         exported_events=exported_events,
     )
+
+
+def _graded_detail(summary: RunSummary | None) -> str | None:
+    # A run that failed on a reply the end checks refused is named by what
+    # they found, so the grade can tell it from an outage of the server. A
+    # run killed after that reply and before its end keeps no detail.
+    if summary is None:
+        return None
+    if summary.reason == "failed" and summary.output_fault is not None:
+        return f"{OUTPUT_FAULT}{summary.output_fault}"
+    return summary.detail
 
 
 def _written(harness: Path, record: TrialRecord) -> TrialRecord:

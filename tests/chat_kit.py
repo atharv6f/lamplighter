@@ -51,7 +51,7 @@ from tests.port_counter import (
     CountedTools,
     Counter,
 )
-from tests.run_history import SESSION
+from tests.run_history import MODEL_NAME, SESSION
 from tests.waiting_clock import JumpingClock
 
 MAX_RECORD_BYTES = 200_000
@@ -130,7 +130,8 @@ def process(
         log=CountedLog(stores.log, counter),
         inbox=CountedInbox(stores.inbox, counter),
         outbox=CountedOutbox(stores.outbox, counter),
-        model=CountedModel(model, counter),
+        models={MODEL_NAME: CountedModel(model, counter)},
+        health={},
         tools=CountedTools(note_tools(clock), counter),
         ledger=CountedLedger(stores.ledger, counter),
         blobs=CountedBlobs(stores.blobs, counter),

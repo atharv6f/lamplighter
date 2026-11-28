@@ -22,7 +22,6 @@ from lamplighter.adapters.sqlite import SqliteEventLog, open_database
 from lamplighter.app.bench_trial import (
     RECORD,
     SESSION,
-    TrialModel,
     TrialParts,
     TrialRequest,
     TrialStore,
@@ -32,6 +31,7 @@ from lamplighter.app.bench_trial import (
 from lamplighter.app.chat import Tooling, chat, run_spec
 from lamplighter.app.config import Config, load_config
 from lamplighter.app.main import builtin_tooling, chat_parts, trial_parts, trial_store
+from lamplighter.app.model_set import ModelSet
 from lamplighter.app.work_bounds import MOST_DEPTH, MOST_ENTRIES, MOST_STATED_BYTES
 from lamplighter.bench import Tokens, TrialRecord, read_record, record_text
 from lamplighter.core import run_summary
@@ -47,7 +47,7 @@ from lamplighter.ports import (
     Usage,
     canonical_json,
 )
-from tests.model_by_request import ModelByRequest, assistant_turns
+from tests.model_by_request import ModelByRequest, assistant_turns, model_set
 from tests.terminal_kit import Screen, typed
 from tests.tooling_kit import with_tool_folders
 
@@ -73,6 +73,14 @@ FETCH = ScriptedReply(
     USAGE,
 )
 type Turn = ScriptedReply | ScriptedBreak
+# A reply the adapter's end checks refused for call markup in its text.
+MARKUP = Failure(
+    kind="transient",
+    effect="none",
+    message="Made-up markup.",
+    source="openai_chat",
+    detail={"model_output": "call_markup"},
+)
 SPENT = TrialRecord(
     portable_config_id="p" * 64,
     config_id="c" * 64,
@@ -174,7 +182,8 @@ class Trial:
         parts = self.parts(playing())
         executor = parts.executor(request.as_root, request.user, self.work)
         tools = parts.tools(config.tools, InMemoryBlobStore(1 << 20), executor)
-        return run_spec(config, Tooling(tools, executor), REVISION).portable_config_id
+        spec = run_spec(config, Tooling(tools, executor), REVISION, private=False)
+        return spec.portable_config_id
 
     def parts(self, model: ModelByRequest) -> TrialParts:
         clock = SystemClock()
@@ -205,7 +214,9 @@ class Trial:
             open_store=open_store,
             executor=executor,
             tools=tools,
-            model=lambda config: TrialModel(model, close),
+            models=lambda config: ModelSet(
+                {entry.name: model for entry in config.models}, {}, close
+            ),
         )
 
     def _noted(self, made: TrialStore):  # noqa: ANN202 - the export's own type
@@ -230,7 +241,11 @@ def quick_settings(**values: str) -> str:
 
     No model retries, so that an outage ends at once.
     """
-    text = SETTINGS.read_text()
+    return fitted(SETTINGS.read_text(), **values)
+
+
+def fitted(text: str, **values: str) -> str:
+    """Give the settings text fit to the scripted model's profile, as above."""
     fit = {"model_retries": "0", "cache_hints": "0", "model_max_output": "1_000"}
     for name, value in {**fit, **values}.items():
         old = next(line for line in text.splitlines() if line.startswith(f"{name} ="))
@@ -311,6 +326,12 @@ def test_the_one_message_comes_from_the_bench(tmp_path: Path) -> None:
             ("failed", "model_unavailable"),
             "model_unavailable",
         ),
+        (
+            (ScriptedBreak((), MARKUP),),
+            {},
+            ("failed", "model_output:call_markup"),
+            None,
+        ),
     ],
 )
 def test_each_ending_of_the_run_gives_its_side(
@@ -325,6 +346,12 @@ def test_each_ending_of_the_run_gives_its_side(
     assert (record.run_reason, record.run_detail) == run
     assert (record.gradable, record.infra_reason) == (reason is None, reason)
     assert trial.saved() == record
+
+
+def test_the_record_names_the_models_the_run_asked(tmp_path: Path) -> None:
+    trial = Trial(tmp_path, quick_settings())
+    record = trial.run(playing(SHELL, DONE))
+    assert (record.models_called, record.escalated) == (("frontier",), False)
 
 
 # The stops before the run, which call no model.
@@ -524,8 +551,9 @@ def test_the_prompt_front_is_that_of_a_chat_on_the_same_settings_file(
     screen, errors = Screen(), io.StringIO()
     parts = chat_parts(
         config,
-        in_chat,
-        builtin_tooling(config, SystemClock()),
+        model_set(config, in_chat),
+        builtin_tooling(config, SystemClock(), closed_web()),
+        builtin_tooling(config, SystemClock(), closed_web()),
         InMemoryTraceSink(),
         InMemoryTraceCursor(),
         typed(b"Hello.\n").reader,
@@ -537,3 +565,26 @@ def test_the_prompt_front_is_that_of_a_chat_on_the_same_settings_file(
     trial_front, chat_front = in_trial.requests[0], in_chat.requests[0]
     assert canonical_json(trial_front.system) == canonical_json(chat_front.system)
     assert canonical_json(trial_front.tools) == canonical_json(chat_front.tools)
+
+
+def test_a_trial_of_the_local_first_config_moves_up_and_names_both_models(
+    tmp_path: Path,
+) -> None:
+    text = (SETTINGS.parent / "bench" / "configs" / "local_first.toml").read_text()
+    trial = Trial(tmp_path, fitted(text))
+    # The local model fails, and the frontier one answers.
+    local = playing(ScriptedBreak((), OUTAGE))
+    frontier = playing(DONE)
+
+    async def close() -> None:
+        pass
+
+    def models(config: Config) -> ModelSet:
+        assert [entry.name for entry in config.models] == ["frontier", "local"]
+        return ModelSet({"local": local, "frontier": frontier}, {}, close)
+
+    parts = dataclasses.replace(trial.parts(playing()), models=models)
+    record = asyncio.run(run_trial(parts, trial.request()))
+    assert (len(local.requests), len(frontier.requests)) == (1, 1)
+    assert (record.models_called, record.escalated) == (("local", "frontier"), True)
+    assert (record.run_reason, record.gradable) == ("done", True)
