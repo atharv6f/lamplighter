@@ -22,6 +22,7 @@ FIXED_PROGRAMS = {
     "adapters/harbor_jobs/leftovers.py": {"docker"},
     "adapters/harbor_jobs/runner.py": {"/bin/sh"},
     "adapters/openai_chat/port_owner.py": {"/usr/sbin/lsof", "/bin/ps"},
+    "app/memory_watch.py": {"/usr/sbin/lsof"},
 }
 OS_STARTS = {"fork", "forkpty", "posix_spawn", "posix_spawnp", "system", "popen"}
 
