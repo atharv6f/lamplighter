@@ -1,5 +1,6 @@
 """The ports one call of the loop uses, handed in together."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from lamplighter.core.observers import Observers
@@ -9,6 +10,7 @@ from lamplighter.ports import (
     Clock,
     EffectLedger,
     EventLog,
+    HealthCheck,
     IdSource,
     Inbox,
     ModelClient,
@@ -21,8 +23,10 @@ from lamplighter.ports import (
 class Deps:
     """Everything outside the loop that the loop reads, writes or calls.
 
-    `ledger` records every change before and after its tool runs. `blobs`
-    holds the whole text of a result that was cut. `observers` and
+    `models` holds a client for each model entry of the settings, by its
+    name, and `health` the health check of each that runs in a separate
+    process on this Mac. `ledger` records every change before and after its
+    tool runs. `blobs` holds the whole text of a result that was cut. `observers` and
     `running` are not ports. They touch nothing outside the process, and
     `running` is shared by the whole of it.
     """
@@ -30,7 +34,8 @@ class Deps:
     log: EventLog
     inbox: Inbox
     outbox: Outbox
-    model: ModelClient
+    models: Mapping[str, ModelClient]
+    health: Mapping[str, HealthCheck]
     tools: ToolProvider
     ledger: EffectLedger
     blobs: BlobStore

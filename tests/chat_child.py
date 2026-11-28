@@ -63,7 +63,7 @@ from lamplighter.ports import (
 from tests.builtin_kit import NO_WEB
 from tests.direct_executor import DirectExecutor
 from tests.kill_kit import Turn, answers, call, last_said
-from tests.model_by_request import Choose, ModelByRequest
+from tests.model_by_request import Choose, ModelByRequest, model_set
 from tests.model_samples import PROFILE
 from tests.run_history import inbound, stop
 from tests.settings_text import with_profile
@@ -407,7 +407,9 @@ def main() -> int:
     config = config_for(folder, acts.cancel_bound_ms)
     parts = chat_parts(
         config,
-        ModelByRequest(numbered(acts.choose), clock, acts.model_seconds),
+        model_set(
+            config, ModelByRequest(numbered(acts.choose), clock, acts.model_seconds)
+        ),
         _tooling(config, acts, folder / STARTED),
         SpanFileSink(folder / SPANS_SENT),
         trace_cursor(config),

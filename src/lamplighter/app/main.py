@@ -36,6 +36,7 @@ from lamplighter.adapters.builtin_tools import (
 from lamplighter.adapters.container import AsRoot, ContainerExecutor
 from lamplighter.adapters.harbor_jobs import HarborJobs, HarborPaths
 from lamplighter.adapters.in_memory import InMemoryBlobStore
+from lamplighter.adapters.openai_chat import OpenAIChatModel, port_owner
 from lamplighter.adapters.phoenix import PhoenixSink
 from lamplighter.adapters.seatbelt import SeatbeltExecutor
 from lamplighter.adapters.sqlite import (
@@ -57,7 +58,6 @@ from lamplighter.app.bench_settings import (
     load_bench_settings,
 )
 from lamplighter.app.bench_trial import (
-    TrialModel,
     TrialParts,
     TrialRequest,
     TrialStore,
@@ -66,10 +66,11 @@ from lamplighter.app.bench_trial import (
 from lamplighter.app.chat import OFF_THIS_MAC, ChatParts, Stores, Tooling, chat
 from lamplighter.app.code_revision import REPO_ROOT, code_revision
 from lamplighter.app.config import Config, load_config
+from lamplighter.app.model_set import ModelSet
 from lamplighter.app.report import day_lines
 from lamplighter.app.traces import export_spans, reset_cursor
 from lamplighter.bench import TrialRecord
-from lamplighter.core import SPAN_LAYOUT, portable_config_id
+from lamplighter.core import SPAN_LAYOUT, UPCASTERS, portable_config_id
 from lamplighter.ports import (
     BlobStore,
     Clock,
@@ -91,10 +92,43 @@ STORE_TIMEOUT_S = 5.0
 _DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 
 
-def build_model(config: Config, api_key: str) -> ModelClient:
-    """Build the client for the model the settings name."""
-    profile = config.default_model().profile
-    return AnthropicModel(profile, api_key, httpx.AsyncClient(), SystemClock())
+def build_models(config: Config, api_key: str, clock: Clock) -> ModelSet:
+    """Build a client for each model entry of the settings, by its name.
+
+    The Anthropic models share one HTTP client. Each model on this Mac
+    builds its own, which reads no proxy, and is also its health check.
+    """
+    http = httpx.AsyncClient()
+    clients: dict[str, ModelClient] = {}
+    local: dict[str, OpenAIChatModel] = {}
+    for entry in config.models:
+        if entry.local is None:
+            clients[entry.name] = AnthropicModel(entry.profile, api_key, http, clock)
+            continue
+        server = entry.local
+        local[entry.name] = OpenAIChatModel(
+            entry.profile,
+            server.base_url,
+            server.server_dir,
+            port_owner,
+            clock,
+            server_kind=server.kind,
+            count=server.count,
+            call_markers=server.call_markers,
+        )
+    clients.update(local)
+
+    async def close() -> None:
+        await http.aclose()
+        for client in local.values():
+            await client.aclose()
+
+    return ModelSet(clients, dict(local), close)
+
+
+def needs_key(config: Config) -> bool:
+    """Say whether any model of the settings is on Anthropic's API."""
+    return any(entry.local is None for entry in config.models)
 
 
 def trace_sink(config: Config, clock: Clock) -> PhoenixSink:
@@ -196,16 +230,16 @@ def _day(text: str) -> str:
 
 
 def _chat(config: Config, session_id: str | None) -> int:
-    key = os.environ.get("ANTHROPIC_API_KEY")
-    if not key:
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not key and needs_key(config):
         print(NO_KEY, file=sys.stderr)
         return 1
-    model = build_model(config, key)
     clock = SystemClock()
+    models = build_models(config, key, clock)
     tooling = builtin_tooling(config, clock)
     parts = chat_parts(
         config,
-        model,
+        models,
         tooling,
         trace_sink(config, clock),
         trace_cursor(config),
@@ -251,7 +285,7 @@ def _no_command(command: Command) -> Failure:
 
 def chat_parts(
     config: Config,
-    model: ModelClient,
+    models: ModelSet,
     tooling: Callable[[BlobStore], Tooling],
     sink: TraceSink,
     cursor: TraceCursor,
@@ -275,7 +309,8 @@ def chat_parts(
         return TerminalChannel(session_id, clock, ids, reader, writer)
 
     return ChatParts(
-        model,
+        models.clients,
+        models.health,
         tooling,
         clock,
         ids,
@@ -306,7 +341,7 @@ def stores_on(
     """
     max_record_bytes = config.store.max_record_bytes
     return Stores(
-        log=SqliteEventLog(connection, {}, max_record_bytes),
+        log=SqliteEventLog(connection, UPCASTERS, max_record_bytes),
         inbox=SqliteInbox(connection, max_record_bytes),
         outbox=SqliteOutbox(connection, clock, max_record_bytes),
         ledger=SqliteEffectLedger(connection, clock, max_record_bytes),
@@ -349,10 +384,8 @@ def trial_parts(api_key: str, revision: str) -> TrialParts:
     def tools(settings: ToolSettings, blobs: BlobStore, wall: Executor) -> ToolProvider:
         return BuiltinTools(settings, blobs, wall, clock, closed_web())
 
-    def model(config: Config) -> TrialModel:
-        http = httpx.AsyncClient()
-        client = AnthropicModel(config.default_model().profile, api_key, http, clock)
-        return TrialModel(client, http.aclose)
+    def models(config: Config) -> ModelSet:
+        return build_models(config, api_key, clock)
 
     return TrialParts(
         clock=clock,
@@ -361,7 +394,7 @@ def trial_parts(api_key: str, revision: str) -> TrialParts:
         open_store=lambda folder, config: trial_store(folder, config, clock),
         executor=executor,
         tools=tools,
-        model=model,
+        models=models,
     )
 
 
@@ -447,7 +480,7 @@ async def _store_command(
     args: argparse.Namespace, config: Config, connection: sqlite3.Connection
 ) -> int:
     clock = SystemClock()
-    log = SqliteEventLog(connection, {}, config.store.max_record_bytes)
+    log = SqliteEventLog(connection, UPCASTERS, config.store.max_record_bytes)
     if args.command == "traces":
         sink, cursor = trace_sink(config, clock), trace_cursor(config)
         return await export_spans(log, sink, cursor, clock, sys.stdout, sys.stderr)
@@ -480,7 +513,7 @@ async def _store_command(
 
 async def _sessions(config: Config, connection: sqlite3.Connection) -> int:
     limit = config.store.max_record_bytes
-    infos = await SqliteEventLog(connection, {}, limit).sessions(None)
+    infos = await SqliteEventLog(connection, UPCASTERS, limit).sessions(None)
     if isinstance(infos, Failure):
         return _failed(infos)
     effects = await SqliteEffectLedger(connection, SystemClock(), limit).unresolved()

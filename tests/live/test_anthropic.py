@@ -16,9 +16,10 @@ from typing import cast
 
 import pytest
 
+from lamplighter.adapters import SystemClock
 from lamplighter.adapters.sqlite import SqliteEventLog, open_database
 from lamplighter.app.config import Config, load_config
-from lamplighter.app.main import build_model
+from lamplighter.app.main import build_models
 from lamplighter.core import (
     MODEL_RESPONSE,
     TOOL_RESULT,
@@ -92,7 +93,8 @@ def config() -> Config:
 
 @pytest.fixture
 def client(config: Config) -> ModelClient:
-    return build_model(config, os.environ["ANTHROPIC_API_KEY"])
+    models = build_models(config, os.environ["ANTHROPIC_API_KEY"], SystemClock())
+    return models.clients[config.default_model().name]
 
 
 def user(*parts: TextPart | ToolResultPart) -> Message:

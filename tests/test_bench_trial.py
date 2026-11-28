@@ -22,7 +22,6 @@ from lamplighter.adapters.sqlite import SqliteEventLog, open_database
 from lamplighter.app.bench_trial import (
     RECORD,
     SESSION,
-    TrialModel,
     TrialParts,
     TrialRequest,
     TrialStore,
@@ -32,6 +31,7 @@ from lamplighter.app.bench_trial import (
 from lamplighter.app.chat import Tooling, chat, run_spec
 from lamplighter.app.config import Config, load_config
 from lamplighter.app.main import builtin_tooling, chat_parts, trial_parts, trial_store
+from lamplighter.app.model_set import ModelSet
 from lamplighter.app.work_bounds import MOST_DEPTH, MOST_ENTRIES, MOST_STATED_BYTES
 from lamplighter.bench import Tokens, TrialRecord, read_record, record_text
 from lamplighter.core import run_summary
@@ -47,7 +47,7 @@ from lamplighter.ports import (
     Usage,
     canonical_json,
 )
-from tests.model_by_request import ModelByRequest, assistant_turns
+from tests.model_by_request import ModelByRequest, assistant_turns, model_set
 from tests.terminal_kit import Screen, typed
 from tests.tooling_kit import with_tool_folders
 
@@ -174,7 +174,8 @@ class Trial:
         parts = self.parts(playing())
         executor = parts.executor(request.as_root, request.user, self.work)
         tools = parts.tools(config.tools, InMemoryBlobStore(1 << 20), executor)
-        return run_spec(config, Tooling(tools, executor), REVISION).portable_config_id
+        spec = run_spec(config, Tooling(tools, executor), REVISION, private=False)
+        return spec.portable_config_id
 
     def parts(self, model: ModelByRequest) -> TrialParts:
         clock = SystemClock()
@@ -205,7 +206,9 @@ class Trial:
             open_store=open_store,
             executor=executor,
             tools=tools,
-            model=lambda config: TrialModel(model, close),
+            models=lambda config: ModelSet(
+                {entry.name: model for entry in config.models}, {}, close
+            ),
         )
 
     def _noted(self, made: TrialStore):  # noqa: ANN202 - the export's own type
@@ -524,7 +527,7 @@ def test_the_prompt_front_is_that_of_a_chat_on_the_same_settings_file(
     screen, errors = Screen(), io.StringIO()
     parts = chat_parts(
         config,
-        in_chat,
+        model_set(config, in_chat),
         builtin_tooling(config, SystemClock()),
         InMemoryTraceSink(),
         InMemoryTraceCursor(),

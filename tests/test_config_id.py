@@ -87,10 +87,10 @@ TOOL_SETTINGS: JsonObject = {
     "fetch_seconds": 30,
 }
 WALL: JsonObject = {"adapter": "seatbelt", "profile_sha256": "a" * 64}
-# Worked out once from the saved JSON text of the six, checked by running
+# Worked out once from the saved JSON text of the seven, checked by running
 # sha256sum on that text, and pinned here, so a change to how the id is
 # made shows up as a change to this value.
-PINNED = "def116421111552db8fab2de176fc59109d635a7ddcef9ecd5848bff7b6d9f60"
+PINNED = "ae0d98e7017d5b0eafc50c21a319b578b6c441175a3f4050334c80975d1502fa"
 # The portable id of the same five, without the wall and the three
 # settings of where it runs, worked out and checked the same way.
 PORTABLE_PINNED = "6f31ec738694a9ae481218f387e58ed5d1b4f916b57b38659a88c113e19fe973"
@@ -103,8 +103,9 @@ def made(
     tools: tuple[ToolEntry, ...] = (ENTRY,),
     tool_settings: JsonObject = TOOL_SETTINGS,
     wall: JsonObject = WALL,
+    private: bool = False,
 ) -> str:
-    return config_id(models, routes, run, tools, tool_settings, wall)
+    return config_id(models, routes, run, tools, tool_settings, wall, private)
 
 
 def models_changed() -> list[tuple[object, ...]]:
@@ -154,7 +155,7 @@ def test_the_id_of_known_settings_is_the_pinned_value() -> None:
     assert made() == PINNED
 
 
-def test_a_change_to_any_of_the_six_gives_another_id() -> None:
+def test_a_change_to_any_of_the_seven_gives_another_id() -> None:
     changed = [
         *(made(models=models) for models in models_changed()),
         *(made(routes=routes) for routes in routes_changed()),
@@ -174,6 +175,7 @@ def test_a_change_to_any_of_the_six_gives_another_id() -> None:
         made(tool_settings={**TOOL_SETTINGS, "work_dir": "/made-up/moved"}),
         made(wall={**WALL, "os_version": "26.5.1"}),
         made(wall={**WALL, "profile_sha256": "b" * 64}),
+        made(private=True),
     ]
     assert made() not in changed
     assert len(set(changed)) == len(changed)

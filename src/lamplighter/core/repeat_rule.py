@@ -4,7 +4,9 @@ Two calls are the same when the tool name, the arguments and the result
 text are all equal. A tool asked the same thing that answers something new
 is making progress and is never stopped. The third such call in a row gets
 a warning at the end of its result. Once the model has seen that warning,
-the next such call ends the run.
+the next such call ends the run. Only the calls since the run's last
+choice of a model count, so a model the run has just moved to is not held
+to the calls of the one before it.
 """
 
 from lamplighter.core.run_view import CallRecord, RunView
@@ -20,7 +22,9 @@ def deserves_warning(view: RunView, index: int, result: str) -> bool:
         return False
     this = view.calls[index]
     before = view.calls[index - 2 : index]
-    return all(_same(call, this, result) for call in before)
+    return _since_choice(view, before) and all(
+        _same(call, this, result) for call in before
+    )
 
 
 def ends_the_run(view: RunView, index: int) -> bool:
@@ -39,9 +43,15 @@ def ends_the_run(view: RunView, index: int) -> bool:
     if first_result is None:
         return False
     return (
-        all(_same(call, this, first_result) for call in before)
+        _since_choice(view, before)
+        and all(_same(call, this, first_result) for call in before)
         and before[-1].reply_seq < this.reply_seq
     )
+
+
+def _since_choice(view: RunView, calls: tuple[CallRecord, ...]) -> bool:
+    after = 0 if view.route is None else view.route.seq
+    return all(call.reply_seq > after for call in calls)
 
 
 def _same(call: CallRecord, this: CallRecord, result: str) -> bool:

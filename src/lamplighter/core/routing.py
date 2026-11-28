@@ -83,6 +83,7 @@ async def start_run(
                 "code_revision": spec.code_revision,
                 "trigger": "message",
                 "wall": spec.wall,
+                "private": spec.private,
             },
             at=at,
             run_id=run_id,

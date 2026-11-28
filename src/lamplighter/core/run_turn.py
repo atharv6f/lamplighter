@@ -3,6 +3,8 @@
 from collections.abc import Mapping
 
 from lamplighter.core.effect_step import run_change, settle_effect
+from lamplighter.core.harness_texts import no_model_notice, private_no_model_notice
+from lamplighter.core.model_choice import Choice, Keep, NoModel
 from lamplighter.core.model_step import call_model
 from lamplighter.core.next_move import (
     AnswerCall,
@@ -10,6 +12,7 @@ from lamplighter.core.next_move import (
     CloseRun,
     DropStops,
     EndRun,
+    Escalate,
     FinishRouting,
     Idle,
     Move,
@@ -19,6 +22,7 @@ from lamplighter.core.next_move import (
     TakeMessages,
     next_move,
 )
+from lamplighter.core.route_step import is_private, route_step
 from lamplighter.core.routing import (
     drop_stops,
     finish_routing,
@@ -30,7 +34,7 @@ from lamplighter.core.run_ending import TurnEnd, close_run, end_run
 from lamplighter.core.run_spec import RunSpec
 from lamplighter.core.run_view import RunView, view_of
 from lamplighter.core.tool_step import answer_call, run_call
-from lamplighter.ports import Event, Failure, ToolEntry
+from lamplighter.ports import Event, Failure, ToolEntry, ToolSpec
 
 _SOURCE = "run_turn"
 
@@ -126,8 +130,8 @@ async def _carry_out(
             )
         case TakeMessages():
             return await take_messages(session_id, view, move.messages, deps)
-        case CallModel():
-            return await call_model(session_id, view, events, tools, spec, deps)
+        case CallModel() | Escalate():
+            return await _model_move(session_id, view, move, events, tools, spec, deps)
         case RunCall() | SettleEffect():
             return await _tool_move(session_id, view, move, entries, spec, deps)
         case AnswerCall():
@@ -138,6 +142,50 @@ async def _carry_out(
             return await end_run(session_id, view, move, deps)
         case Idle() | CloseRun():
             raise ValueError("the loop itself handles this move")
+
+
+async def _model_move(
+    session_id: str,
+    view: RunView,
+    move: CallModel | Escalate,
+    events: tuple[Event, ...],
+    tools: tuple[ToolSpec, ...],
+    spec: RunSpec,
+    deps: Deps,
+) -> Failure | None:
+    if isinstance(move, Escalate):
+        return await _escalate(session_id, view, move, spec, deps)
+    # A new choice ends the move. The loop builds the view again, and the
+    # next move calls the model it names.
+    answer = await route_step(session_id, view, spec, deps, None)
+    match answer:
+        case Failure():
+            return answer
+        case Choice():
+            return None
+        case NoModel():
+            notice = (
+                private_no_model_notice(answer.ladder)
+                if is_private(view, spec)
+                else no_model_notice(answer.ladder)
+            )
+            ending = EndRun("failed", "no_model", "notice", notice)
+            return await end_run(session_id, view, ending, deps)
+        case Keep():
+            return await call_model(session_id, view, events, tools, spec, deps)
+
+
+async def _escalate(
+    session_id: str, view: RunView, move: Escalate, spec: RunSpec, deps: Deps
+) -> Failure | None:
+    # A choice ends the move, and the failed reply then leads to nothing.
+    # With no model above that is up, the run ends as it would have.
+    answer = await route_step(session_id, view, spec, deps, move.signal)
+    if isinstance(answer, Failure):
+        return answer
+    if isinstance(answer, Choice):
+        return None
+    return await end_run(session_id, view, move.end, deps)
 
 
 async def _tool_move(

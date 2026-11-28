@@ -9,6 +9,7 @@ row. The third was made after, and is compared with what this code writes
 today.
 """
 
+import dataclasses
 import json
 import sqlite3
 from collections.abc import Sequence
@@ -29,7 +30,10 @@ from lamplighter.adapters.sqlite import (
     SqliteInbox,
     SqliteOutbox,
 )
+from lamplighter.core import MODEL_REQUEST, ROUTE_DECIDED, UPCASTERS
+from lamplighter.core.event_types import READ_VERSION
 from lamplighter.ports import (
+    RUN_STARTED,
     Action,
     Begun,
     EffectLedger,
@@ -47,6 +51,7 @@ STORES = Path(__file__).parents[1] / "stores"
 FIRST = STORES / "version_2_tools.sql"
 WITH_MODEL = STORES / "version_2_tools_with_model.sql"
 WITH_REVISION = STORES / "version_2_tools_with_revision.sql"
+WITH_ROUTES = STORES / "version_2_routes.sql"
 LIMIT = 4_194_304
 STATES = {"intended", "done", "failed", "unknown", "resolved"}
 SESSIONS = ("sess-a", "sess-b", "sess-c")
@@ -112,7 +117,7 @@ async def everything(
 
 
 def fakes() -> tuple[tuple[object, ...], tuple[Action, ...]]:
-    log = InMemoryEventLog({}, LIMIT)
+    log = InMemoryEventLog(UPCASTERS, LIMIT)
     inbox = InMemoryInbox(LIMIT)
     outbox = InMemoryOutbox(LIMIT)
     ledger = InMemoryEffectLedger(FakeClock(), LIMIT)
@@ -159,14 +164,54 @@ def test_the_frozen_tool_store_with_the_model_reads_back_what_its_rows_hold(
     assert started == 5
 
 
-def test_the_frozen_tool_store_with_the_revision_reads_as_this_code_would_write_it(
+def test_the_frozen_tool_store_with_the_revision_reads_back_what_its_rows_hold(
     tmp_path: Path,
 ) -> None:
     connection = frozen(tmp_path, WITH_REVISION)
+    log = SqliteEventLog(connection, {}, LIMIT)
+    for session in SESSIONS:
+        read = run(log.read(session, 0))
+        assert not isinstance(read, Failure), read
+        assert list(read) == rows_as_events(connection, session)
+        assert ROUTE_DECIDED not in {event.type for event in read}
+
+
+@pytest.mark.parametrize(
+    "text", [FIRST, WITH_MODEL, WITH_REVISION], ids=["first", "model", "revision"]
+)
+def test_a_store_from_before_routes_reads_up_as_ordinary_runs_of_no_named_model(
+    tmp_path: Path, text: Path
+) -> None:
+    # Each run then was an ordinary one, on the one model of the settings,
+    # which had no name. Nothing else of the event changes.
+    connection = frozen(tmp_path, text)
+    raised = 0
+    for session in SESSIONS:
+        read = run(SqliteEventLog(connection, UPCASTERS, LIMIT).read(session, 0))
+        assert not isinstance(read, Failure), read
+        for event, row in zip(read, rows_as_events(connection, session), strict=True):
+            added = UPCASTERS.get((row.type, row.v))
+            if added is None:
+                assert event == row
+                continue
+            raised += 1
+            assert event.v == row.v + 1 == READ_VERSION[row.type]
+            extra = {"private": False} if row.type == RUN_STARTED else {}
+            if row.type == MODEL_REQUEST:
+                extra = {"model_name": None}
+            assert event.payload == {**row.payload, **extra}
+            assert dataclasses.replace(event, v=row.v, payload=row.payload) == row
+    assert raised == 5 + 8
+
+
+def test_the_frozen_tool_store_with_routes_reads_as_this_code_would_write_it(
+    tmp_path: Path,
+) -> None:
+    connection = frozen(tmp_path, WITH_ROUTES)
     expected, actions = fakes()
     from_file = run(
         everything(
-            SqliteEventLog(connection, {}, LIMIT),
+            SqliteEventLog(connection, UPCASTERS, LIMIT),
             SqliteInbox(connection, LIMIT),
             SqliteOutbox(connection, FakeClock(), LIMIT),
             SqliteEffectLedger(connection, FakeClock(), LIMIT),
@@ -212,8 +257,8 @@ def test_the_second_store_saves_the_model_and_the_provider_on_each_request(
 
 @pytest.mark.parametrize(
     "text",
-    [FIRST, WITH_MODEL, WITH_REVISION],
-    ids=["first", "with_model", "with_revision"],
+    [FIRST, WITH_MODEL, WITH_REVISION, WITH_ROUTES],
+    ids=["first", "with_model", "with_revision", "with_routes"],
 )
 def test_it_holds_every_tool_payload_and_an_effect_in_each_state(
     tmp_path: Path, text: Path

@@ -74,7 +74,7 @@ from tests.port_counter import (
 )
 from tests.projection_checks import quick_wrong
 from tests.real_folder import RealFolder, new_folder
-from tests.run_history import SESSION, SPEC
+from tests.run_history import MODEL_NAME, SESSION, SPEC
 from tests.span_checks import spans_wrong
 from tests.waiting_clock import JumpingClock, WaitingClock
 
@@ -294,7 +294,10 @@ async def _one_process(
         log=CountedLog(stores.log, counter),
         inbox=CountedInbox(stores.inbox, counter),
         outbox=CountedOutbox(stores.outbox, counter),
-        model=CountedModel(ModelByRequest(answers(scenario.script)), counter),
+        models={
+            MODEL_NAME: CountedModel(ModelByRequest(answers(scenario.script)), counter)
+        },
+        health={},
         tools=CountedTools(tools, counter),
         ledger=CountedLedger(MirroredLedger(stores.ledger, world.rows), counter),
         blobs=CountedBlobs(stores.blobs, counter),

@@ -5,7 +5,7 @@ import dataclasses
 import logging
 import os
 import signal
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn, TextIO
@@ -40,6 +40,7 @@ from lamplighter.ports import (
     EventLog,
     Executor,
     Failure,
+    HealthCheck,
     IdSource,
     Inbox,
     ModelClient,
@@ -119,10 +120,13 @@ class ChatParts:
     only once their folders are, with the store's blobs, and the terminal is
     made only once the session id is known. The chat sends the spans of
     the log to `sink` and keeps how far it got in `cursor`. `code_revision`
-    names the code this process runs, and every run saves it.
+    names the code this process runs, and every run saves it. `models` holds
+    a client for each model entry of the settings, by its name, and
+    `health` the health check of each that runs as a server on this Mac.
     """
 
-    model: ModelClient
+    models: Mapping[str, ModelClient]
+    health: Mapping[str, HealthCheck]
     tooling: Callable[[BlobStore], Tooling]
     clock: Clock
     ids: IdSource
@@ -203,7 +207,8 @@ async def _serve(
         log=stores.log,
         inbox=stores.inbox,
         outbox=stores.outbox,
-        model=parts.model,
+        models=parts.models,
+        health=parts.health,
         tools=tooling.tools,
         ledger=stores.ledger,
         blobs=stores.blobs,
@@ -215,7 +220,7 @@ async def _serve(
     projector = TraceProjector(stores.log, parts.sink, parts.cursor)
     failed = await _talk(
         session_id,
-        run_spec(config, tooling, parts.code_revision),
+        run_spec(config, tooling, parts.code_revision, private=False),
         deps,
         terminal,
         tooling.executor,
@@ -403,27 +408,30 @@ def check_schemas(tools: ToolProvider) -> None:
             )
 
 
-def run_spec(config: Config, tooling: Tooling, code_revision: str) -> RunSpec:
+def run_spec(
+    config: Config, tooling: Tooling, code_revision: str, private: bool
+) -> RunSpec:
     """Build the spec every run of this process keeps, with its two config ids.
 
     `chat` and a trial of the bench both build their spec here, so one
     settings file gives one system prompt and one tool list in both.
+    `private` says the runs may use only models whose calls stay on this Mac.
     """
     run = config.run
-    first = config.default_model()
     wall = tooling.executor.wall()
     tools = tooling.tools.list_tools()
     tool_settings = dataclasses.asdict(config.tools)
     return RunSpec(
         config_id=config_id(
-            config.models, config.routes, run, tools, tool_settings, wall
+            config.models, config.routes, run, tools, tool_settings, wall, private
         ),
         portable_config_id=portable_config_id(
             config.models, config.routes, run, tools, tool_settings
         ),
         code_revision=code_revision,
-        model=first.profile.model,
-        provider=first.profile.adapter,
+        models=tuple(entry.named() for entry in config.models),
+        routes=config.routes,
+        private=private,
         system=run.system,
         max_steps=run.max_steps,
         max_seconds=run.max_seconds,
@@ -433,7 +441,6 @@ def run_spec(config: Config, tooling: Tooling, code_revision: str) -> RunSpec:
         model_deadline_ms=run.model_deadline_ms,
         model_retries=run.model_retries,
         cancel_bound_ms=run.cancel_bound_ms,
-        prices=first.prices,
         wall=wall,
     )
 

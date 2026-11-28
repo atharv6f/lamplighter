@@ -10,12 +10,16 @@ from lamplighter.core.event_types import (
     MODEL_RESPONSE,
     READ_VERSION,
     REPLY_READY,
+    ROUTE_DECIDED,
     TOOL_INTENT,
     TOOL_RESULT,
 )
 from lamplighter.core.harness_texts import without_repeat_warning
+from lamplighter.core.model_choice import Signal
 from lamplighter.core.reply import Reply
 from lamplighter.core.reply_shape import is_whole, tool_calls
+from lamplighter.core.route_signals import standing_signal
+from lamplighter.core.session_privacy import session_is_private
 from lamplighter.ports import (
     RUN_END,
     RUN_STARTED,
@@ -94,6 +98,21 @@ class LastReply:
 
     reply: Reply
     event_id: str
+    seq: int
+
+
+@dataclass(frozen=True, slots=True)
+class RouteFact:
+    """The run's last choice of a model: its route, its model, and its place.
+
+    `position` is the model's place on the route's ladder as the settings
+    write it, and `seq` the sequence number of the `route_decided` event.
+    """
+
+    route_id: str
+    model: str
+    position: int
+    seq: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,14 +130,24 @@ class Ending:
 class RunView:
     """What the session's events say about its open run, and nothing else.
 
-    With no open run, every field after `event_ids` is empty. What the run
-    has used is summed over its saved events, so a resumed run keeps
+    With no open run, every field after `session_size` is empty. What the
+    run has used is summed over its saved events, so a resumed run keeps
     counting from where it was.
+
+    `session_private` says whether any run of the session was private.
+    `session_size` is the prompt plus the output of the session's last reply
+    whose counts split the prompt, in this run or an earlier one: a lower
+    bound on the next prompt, or None when no reply has one. `route` is the
+    run's last choice, and `signal` the one standing since it. `bad_streak`
+    and the repeat rule count only what came after that choice, so a model
+    the run has just moved to starts with the chances the first one had.
     """
 
     last_seq: int
     session_exists: bool
     event_ids: Mapping[str, int]
+    session_private: bool = False
+    session_size: int | None = None
     run_id: str | None = None
     config_id: str | None = None
     step: int = 0
@@ -130,6 +159,8 @@ class RunView:
     bad_streak: int = 0
     calls: tuple[CallRecord, ...] = ()
     ending: Ending | None = None
+    route: RouteFact | None = None
+    signal: Signal | None = None
 
 
 @dataclass
@@ -147,6 +178,8 @@ class _Tally:
     bad_streak: int = 0
     first_call: int = 0
     ending: Ending | None = None
+    route: RouteFact | None = None
+    after_route: int = 0
 
 
 def view_of(events: Sequence[Event]) -> RunView | Failure:
@@ -164,21 +197,21 @@ def view_of(events: Sequence[Event]) -> RunView | Failure:
                 f" {event.v}, at seq {event.seq}.",
                 source=_SOURCE,
             )
-    base = RunView(
-        last_seq=events[-1].seq if events else 0,
-        session_exists=bool(events),
-        event_ids={event.event_id: event.seq for event in events},
-    )
-    start = _open_run_start(events)
-    if start is None:
-        return base
     try:
-        return _run_view(base, events[start:])
+        base = RunView(
+            last_seq=events[-1].seq if events else 0,
+            session_exists=bool(events),
+            event_ids={event.event_id: event.seq for event in events},
+            session_private=session_is_private(events),
+            session_size=_session_size(events),
+        )
+        start = _open_run_start(events)
+        return base if start is None else _run_view(base, events[start:])
     except ValueError:
         return Failure(
             kind="fatal",
             effect="none",
-            message="An event of the open run does not fit its type.",
+            message="An event of the session does not fit its type.",
             source=_SOURCE,
         )
 
@@ -201,12 +234,16 @@ def _run_view(base: RunView, run: Sequence[Event]) -> RunView:
     )
     calls: list[CallRecord] = []
     intents: dict[int, list[SavedIntent]] = {}
-    for event in run[1:]:
+    for place, event in enumerate(run[1:], start=1):
         _count(tally, calls, intents, event)
+        if event.type == ROUTE_DECIDED:
+            tally.after_route = place + 1
     return RunView(
         last_seq=base.last_seq,
         session_exists=base.session_exists,
         event_ids=base.event_ids,
+        session_private=base.session_private,
+        session_size=base.session_size,
         run_id=tally.run_id,
         config_id=tally.config_id,
         step=tally.step,
@@ -218,6 +255,8 @@ def _run_view(base: RunView, run: Sequence[Event]) -> RunView:
         bad_streak=tally.bad_streak,
         calls=tuple(calls),
         ending=tally.ending,
+        route=tally.route,
+        signal=standing_signal(run[tally.after_route :]) if tally.route else None,
     )
 
 
@@ -243,6 +282,14 @@ def _count(
             calls[place] = dataclasses.replace(
                 calls[place], result=without_repeat_warning(_text(event, "text"))
             )
+    elif event.type == ROUTE_DECIDED:
+        tally.route = RouteFact(
+            route_id=_text(event, "route_id"),
+            model=_text(event, "model"),
+            position=_whole(event, "position"),
+            seq=event.seq,
+        )
+        tally.bad_streak = 0
     elif event.type == REPLY_READY:
         tally.ending = Ending(
             seq=event.seq,
@@ -264,7 +311,7 @@ def _count_reply(
     tally.used_tokens += _tokens(reply.usage)
     cost = event.payload.get("cost_micro_dollars")
     tally.used_micro_dollars += cost if type(cost) is int else 0
-    tally.last_reply = LastReply(reply=reply, event_id=event.event_id)
+    tally.last_reply = LastReply(reply=reply, event_id=event.event_id, seq=event.seq)
     if not is_whole(reply):
         tally.bad_streak += 1
         return
@@ -336,6 +383,19 @@ def call_key(call: ToolCallPart) -> tuple[str, str, str]:
     return (call.name, "json", saved_json(call.arguments))
 
 
+def _session_size(events: Sequence[Event]) -> int | None:
+    for event in reversed(events):
+        if event.type != MODEL_RESPONSE:
+            continue
+        usage = from_stored(Reply, event.payload).usage
+        if usage is None:
+            continue
+        prompt = (usage.input_uncached, usage.cache_read, usage.cache_write)
+        if None not in prompt:
+            return sum(count or 0 for count in prompt) + (usage.output or 0)
+    return None
+
+
 def _tokens(usage: Usage | None) -> int:
     if usage is None:
         return 0
@@ -347,6 +407,13 @@ def _text(event: Event, name: str) -> str:
     value = event.payload.get(name)
     if not isinstance(value, str):
         raise ValueError(f"{event.type} has no text field {name}")
+    return value
+
+
+def _whole(event: Event, name: str) -> int:
+    value = event.payload.get(name)
+    if type(value) is not int:
+        raise ValueError(f"{event.type} has no whole number field {name}")
     return value
 
 

@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from lamplighter.adapters.sqlite import SqliteEventLog
+from lamplighter.core import UPCASTERS
 from lamplighter.ports import Event
 from tests.span_checks import log_spans, spans_wrong
 from tests.span_count import promised_spans
@@ -25,7 +26,7 @@ def events_of(tmp_path: Path, name: str) -> tuple[Event, ...]:
     built = sqlite3.connect(path)
     built.executescript((STORES / name).read_text())
     built.close()
-    events = run(SqliteEventLog(opened(path), {}, LIMIT).tail(0, 10_000))
+    events = run(SqliteEventLog(opened(path), UPCASTERS, LIMIT).tail(0, 10_000))
     assert isinstance(events, tuple)
     return events
 
@@ -42,6 +43,7 @@ NO_CONFIG = ["invoke_agent lamplighter lacks lamp.config_id"]
         ("version_2_tools.sql", 27, []),
         ("version_2_tools_with_model.sql", 27, []),
         ("version_2_tools_with_revision.sql", 27, []),
+        ("version_2_routes.sql", 27, []),
     ],
 )
 def test_a_frozen_store_gives_the_spans_its_events_promise(

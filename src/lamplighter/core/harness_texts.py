@@ -220,6 +220,33 @@ def repeated_call_notice(name: str) -> str:
     )
 
 
+def no_model_notice(names: Sequence[str]) -> str:
+    """Tell you no model in the settings is answering, so nothing was called.
+
+    `names` are the names on the run's ladder.
+    """
+    return (
+        f"No model in the settings is answering: {_listed(names)}. Check that the"
+        " model servers are running and send your message again."
+    )
+
+
+def private_no_model_notice(names: Sequence[str]) -> str:
+    """Tell you no model on this Mac is answering a private run, so nothing was sent.
+
+    `names` are the names on the run's ladder after the privacy veto.
+    """
+    return (
+        "This session is private, so it only uses models on this Mac, and none"
+        f" of them is answering: {_listed(names)}. Nothing was sent off this Mac."
+        " Start the local model server and send your message again."
+    )
+
+
+def _listed(names: Sequence[str]) -> str:
+    return ", ".join(names) or "none"
+
+
 CONFIG_CHANGED_NOTICE = (
     "The settings changed while this run was open, so it was ended. Send your"
     " message again."

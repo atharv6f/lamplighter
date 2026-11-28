@@ -4,7 +4,7 @@ from contextlib import aclosing
 from dataclasses import replace
 from typing import Any, cast
 
-from lamplighter.core.cost import cost_micro_dollars
+from lamplighter.core.cost import Prices, cost_micro_dollars
 from lamplighter.core.event_types import MODEL_REQUEST, MODEL_RESPONSE
 from lamplighter.core.harness_texts import MODEL_OUT_OF_TIME
 from lamplighter.core.interruptible import CutShort, Finished, NotStarted, interruptible
@@ -51,13 +51,17 @@ async def call_model(
 ) -> Failure | None:
     """Save `model_request`, call the model, and save its reply.
 
-    The request is saved first, so a call lost to a kill still counts as a
-    step. Its deadline is the smaller of the setting and the time the run
-    has left, which is at least 1 ms because the time limit is checked
-    before this move is picked. A stop cuts the call short and nothing more
-    is saved. A call still running one cancel bound after its deadline is
-    cut, and saved as a `timeout` failure with what had arrived.
+    The model is the one of the run's last choice. The request is saved
+    first, so a call lost to a kill still counts as a step. Its deadline is
+    the smaller of the setting and the time the run has left, which is at
+    least 1 ms because the time limit is checked before this move is picked.
+    A stop cuts the call short and nothing more is saved. A call still
+    running one cancel bound after its deadline is cut, and saved as a
+    `timeout` failure with what had arrived.
     """
+    if view.route is None:
+        raise ValueError("a model is called only after the run chose one")
+    named = spec.model(view.route.model)
     messages = rebuild_messages(events)
     if isinstance(messages, Failure):
         return messages
@@ -66,8 +70,9 @@ async def call_model(
     asked = replace(view, step=view.step + 1)
     asking: JsonObject = {
         "deadline_ms": deadline_ms,
-        "model": spec.model,
-        "provider": spec.provider,
+        "model_name": named.name,
+        "model": named.profile.model,
+        "provider": named.profile.adapter,
     }
     request_event = in_run(asked, utc_text(deps.clock.now()), MODEL_REQUEST, asking)
     request_seq = await deps.log.append(session_id, (request_event,), view.last_seq)
@@ -86,7 +91,7 @@ async def call_model(
     started = ModelCallStarted(session_id, run_id, step, request)
     await notify(deps.observers.before_model, started, deps.clock)
     start = deps.clock.monotonic()
-    reply = await _ask(session_id, request, spec, deps)
+    reply = await _ask(session_id, deps.models[named.name], request, spec, deps)
     duration_ms = elapsed_ms(start, deps.clock.monotonic())
     if reply is None:
         # Nothing more is saved. The request stays, and counts as a step.
@@ -95,7 +100,7 @@ async def call_model(
         asked,
         utc_text(deps.clock.now()),
         MODEL_RESPONSE,
-        _reply_payload(reply, spec),
+        _reply_payload(reply, named.prices),
         cause=event_id_for(session_id, request_seq),
         duration_ms=duration_ms,
     )
@@ -108,12 +113,16 @@ async def call_model(
 
 
 async def _ask(
-    session_id: str, request: ModelRequest, spec: RunSpec, deps: Deps
+    session_id: str,
+    model: ModelClient,
+    request: ModelRequest,
+    spec: RunSpec,
+    deps: Deps,
 ) -> Reply | None:
     # None when a stop kept the call from starting or cut it short.
     got: list[ModelEvent] = []
     raced = await interruptible(
-        _read_stream(deps.model, request, got),
+        _read_stream(model, request, got),
         deps.running.signal_for(session_id),
         deps.clock,
         # The adapter keeps the deadline itself. This is the backstop behind
@@ -141,11 +150,14 @@ async def _read_stream(
             got.append(event)
 
 
-def _reply_payload(reply: Reply, spec: RunSpec) -> JsonObject:
-    """Give the saved form of a reply, with its cost when the cost is known."""
+def _reply_payload(reply: Reply, prices: Prices | None) -> JsonObject:
+    """Give the saved form of a reply, with its cost when the cost is known.
+
+    A model with no prices gives a reply with no cost, never a cost of 0.
+    """
     payload = cast(dict[str, Any], to_plain(reply))
-    if reply.usage is not None and spec.prices is not None:
-        cost = cost_micro_dollars(reply.usage, spec.prices)
+    if reply.usage is not None and prices is not None:
+        cost = cost_micro_dollars(reply.usage, prices)
         if cost is not None:
             payload["cost_micro_dollars"] = cost
     return payload

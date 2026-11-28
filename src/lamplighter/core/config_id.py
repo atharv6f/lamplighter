@@ -15,8 +15,9 @@ def config_id(
     tools: Sequence[ToolEntry],
     tool_settings: JsonObject,
     wall: JsonObject,
+    private: bool,
 ) -> str:
-    """Give the SHA-256 of the saved JSON of the six, as 64 hex characters.
+    """Give the SHA-256 of the saved JSON of the seven, as 64 hex characters.
 
     `models` are the settings' model entries, each a record with all its
     fields and its prices, and `routes` the rule table, both in the order of
@@ -25,6 +26,8 @@ def config_id(
     spec, class, cap and taint flag. `tool_settings` is the settings file's
     section for the tools, and `wall` the executor's record of its wall, so
     a new version of the system or a moved work folder each give a new id.
+    `private` is the run's own flag, so a private run never carries on a run
+    that was not private, nor the other way.
 
     A run saves it when it starts, so a run found open under other settings
     after a restart is ended and not carried on. The saved form is hashed,
@@ -39,6 +42,7 @@ def config_id(
             "tools": tools,
             "tool_settings": tool_settings,
             "wall": wall,
+            "private": private,
         }
     )
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -58,8 +62,8 @@ def portable_config_id(
 ) -> str:
     """Give one hash that names the same settings on any machine, as 64 hex characters.
 
-    It is `config_id` without the wall and without the two tool folders and
-    the command PATH. So one settings file gives one id on this Mac and in
+    It is `config_id` without the wall, the private flag, the two tool
+    folders and the command PATH. So one settings file gives one id on this Mac and in
     every trial of the bench, where each trial has a work folder of its own.
     """
     kept = {

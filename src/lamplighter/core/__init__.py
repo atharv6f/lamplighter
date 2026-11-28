@@ -13,6 +13,7 @@ from lamplighter.core.event_types import (
     MODEL_REQUEST,
     MODEL_RESPONSE,
     REPLY_READY,
+    ROUTE_DECIDED,
     SESSION_STARTED,
     TOOL_INTENT,
     TOOL_RESULT,
@@ -37,14 +38,18 @@ from lamplighter.core.run_summary import RunSummary, run_summary
 from lamplighter.core.run_turn import run_turn
 from lamplighter.core.running_sessions import RunningSessions
 from lamplighter.core.saved_facts import TokenCounts
+from lamplighter.core.session_privacy import session_is_private
 from lamplighter.core.trace_projector import PassDone, TraceProjector
 from lamplighter.core.transcript import rebuild_messages
+from lamplighter.core.upcasters import UPCASTERS
 
 __all__ = [
     "CANCELLED",
     "LIMIT_HIT",
     "MODEL_REQUEST",
     "REPLY_READY",
+    "ROUTE_DECIDED",
+    "UPCASTERS",
     "SESSION_STARTED",
     "SPAN_LAYOUT",
     "TOOL_INTENT",
@@ -83,6 +88,7 @@ __all__ = [
     "TokenCounts",
     "project_while_open",
     "rebuild_messages",
+    "session_is_private",
     "run_intake",
     "run_turn",
     "config_id",

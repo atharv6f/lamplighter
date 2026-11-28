@@ -27,6 +27,7 @@ from lamplighter.core.limits import (
     seconds_hit,
     time_is_up,
 )
+from lamplighter.core.model_choice import Signal, has_model_above
 from lamplighter.core.repeat_rule import ends_the_run
 from lamplighter.core.reply_shape import (
     final_text,
@@ -35,6 +36,8 @@ from lamplighter.core.reply_shape import (
     is_whole,
     tool_calls,
 )
+from lamplighter.core.route_signals import ending_signal
+from lamplighter.core.route_step import is_private, profiles
 from lamplighter.core.run_spec import RunSpec
 from lamplighter.core.run_view import (
     Ending,
@@ -136,6 +139,14 @@ class CallModel:
     """Ask the model for the next reply."""
 
 
+@dataclass(frozen=True, slots=True)
+class Escalate:
+    """Move the run up its ladder on this signal, or end it as `end` if none is up."""
+
+    signal: Signal
+    end: EndRun
+
+
 type Move = (
     FinishRouting
     | Idle
@@ -148,6 +159,7 @@ type Move = (
     | RunCall
     | TakeMessages
     | CallModel
+    | Escalate
 )
 
 
@@ -228,7 +240,7 @@ def _in_open_run(
     if first is None:
         ending = _what_the_reply_leads_to(view, spec)
         if ending is not None:
-            return ending
+            return _or_escalate(view, spec, ending, stop_pending)
     if view.config_id != spec.config_id:
         return EndRun("failed", "config_changed", "notice", CONFIG_CHANGED_NOTICE)
     if stop_pending:
@@ -307,9 +319,33 @@ def _limit_end(hit: LimitHit) -> EndRun:
     return EndRun("limit", hit.limit, "notice", notice, limit=hit)
 
 
+def _or_escalate(
+    view: RunView, spec: RunSpec, ending: EndRun, stop_pending: bool
+) -> EndRun | Escalate:
+    # Only a run under its own settings moves up, so no ladder of other
+    # settings is read. A stop or a limit ends it as it would have ended.
+    signal = ending_signal(ending.detail)
+    if (
+        signal is None
+        or view.route is None
+        or view.config_id != spec.config_id
+        or stop_pending
+        or first_limit_reached(view, spec) is not None
+    ):
+        return ending
+    private = is_private(view, spec)
+    if not has_model_above(spec.routes, profiles(spec), private, view.route.position):
+        return ending
+    return Escalate(signal, ending)
+
+
 def _what_the_reply_leads_to(view: RunView, spec: RunSpec) -> EndRun | None:
     last = view.last_reply
     if last is None:
+        return None
+    if view.route is not None and last.seq < view.route.seq:
+        # The run moved to another model since this reply, which leads to
+        # nothing now.
         return None
     reply = last.reply
     if isinstance(reply.end, ErrorEvent):

@@ -1,21 +1,25 @@
+import asyncio
 import dataclasses
 import re
 from pathlib import Path
 
 import pytest
 
+from lamplighter.adapters import SystemClock
 from lamplighter.adapters.builtin_tools import ToolSettings
+from lamplighter.adapters.openai_chat import OpenAIChatModel
 from lamplighter.app.config import (
     StoreSettings,
     TraceSettings,
     load_config,
     store_folder,
 )
-from lamplighter.app.main import build_model
+from lamplighter.app.main import build_models, needs_key
+from lamplighter.app.model_set import ModelSet
 from lamplighter.app.model_settings import ModelEntry
 from lamplighter.core import Prices, Route, RunSettings
 from lamplighter.ports import ModelProfile
-from tests.settings_text import GOOD
+from tests.settings_text import GOOD, with_local
 
 SETTINGS = Path(__file__).parents[1] / "lamplighter.toml"
 
@@ -363,7 +367,45 @@ def test_the_settings_file_in_the_repo_sends_spans_to_a_phoenix_on_this_mac() ->
     )
 
 
+async def closed(models: ModelSet) -> None:
+    await models.close()
+
+
 def test_the_builder_gives_a_client_for_the_model_in_the_settings() -> None:
     config = load_config(SETTINGS)
-    client = build_model(config, "made-up-key-0000")
-    assert client.profile == config.default_model().profile
+    models = build_models(config, "made-up-key-0000", SystemClock())
+    try:
+        assert {name: client.profile for name, client in models.clients.items()} == {
+            entry.name: entry.profile for entry in config.models
+        }
+        # Anthropic answers for its own health, so no model there is checked.
+        assert models.health == {}
+    finally:
+        asyncio.run(closed(models))
+
+
+def test_a_model_on_this_mac_gets_its_own_client_and_a_health_check(
+    tmp_path: Path,
+) -> None:
+    config = load_config(write(tmp_path, with_local()))
+    models = build_models(config, "made-up-key-0000", SystemClock())
+    try:
+        local = models.clients["local"]
+        assert isinstance(local, OpenAIChatModel)
+        assert models.health == {"local": local}
+        assert local.profile == next(
+            entry.profile for entry in config.models if entry.name == "local"
+        )
+        assert set(models.clients) == {entry.name for entry in config.models}
+    finally:
+        asyncio.run(closed(models))
+
+
+def test_only_settings_with_a_model_on_anthropic_need_the_key(tmp_path: Path) -> None:
+    both = load_config(write(tmp_path, with_local()))
+    assert needs_key(both)
+    local_only = dataclasses.replace(
+        both,
+        models=tuple(entry for entry in both.models if entry.local is not None),
+    )
+    assert not needs_key(local_only)

@@ -22,6 +22,7 @@ from lamplighter.core.next_move import (
     CloseRun,
     DropStops,
     EndRun,
+    Escalate,
     FinishRouting,
     Idle,
     Move,
@@ -41,6 +42,7 @@ from lamplighter.ports import (
     ToolEntry,
     Usage,
 )
+from tests.ladder_kit import DEFAULT_ROUTE, FRONTIER, LADDER, LOCAL, private
 from tests.model_samples import REASONING
 from tests.run_history import (
     SPEC,
@@ -56,6 +58,7 @@ from tests.run_history import (
 TIMEOUT = Failure(kind="timeout", effect="none", message="Too slow.", source="m")
 BROKEN = Failure(kind="transient", effect="none", message="Cut.", source="m")
 DENIED = Failure(kind="denied", effect="none", message="Refused key.", source="m")
+TOO_LARGE = Failure(kind="too_large", effect="none", message="Too long.", source="m")
 
 
 def view(history: History) -> RunView:
@@ -640,4 +643,107 @@ def test_used_seconds_on_the_limit_are_rounded_down() -> None:
     hit = LimitHit("seconds", 1_200, 1_200)
     assert move(history) == ended(
         "limit", "seconds", limit_notice("seconds", 1_200), hit
+    )
+
+
+# A run on a ladder of two models moves up on an ending reply, when it may.
+
+REFUSED_ENDING = ended("failed", "refused", REFUSED_NOTICE)
+
+
+def on_ladder(model: str = LOCAL, position: int = 0, private: bool = False) -> History:
+    """A run that chose a model, then got a refusal from it."""
+    history = History().start(private=private)
+    history.chose(model, position, route_id="private" if private else "default")
+    history.request()
+    history.reply(TextPart(text="No."), reason="refused")
+    return history
+
+
+def test_an_ending_reply_below_the_top_moves_the_run_up() -> None:
+    assert move(on_ladder(), spec=LADDER) == Escalate("refused", REFUSED_ENDING)
+
+
+@pytest.mark.parametrize(
+    ("failure", "signal"),
+    [(DENIED, "model_failed"), (TOO_LARGE, "too_large"), (TIMEOUT, "model_failed")],
+)
+def test_a_failed_reply_below_the_top_moves_the_run_up_with_its_signal(
+    failure: Failure, signal: str
+) -> None:
+    history = History().start()
+    history.chose(LOCAL, 0)
+    history.request()
+    history.reply(error=failure)
+    made = move(history, spec=LADDER)
+    assert isinstance(made, Escalate)
+    assert (made.signal, made.end.detail) == (signal, f"model_{failure.kind}")
+
+
+def test_a_second_empty_reply_below_the_top_moves_the_run_up() -> None:
+    history = History().start()
+    history.chose(LOCAL, 0)
+    history.step_with(reason="end")
+    history.step_with(reason="end")
+    assert move(history, spec=LADDER) == Escalate(
+        "empty_reply", ended("failed", "empty_reply", EMPTY_REPLY_NOTICE)
+    )
+
+
+def test_an_ending_reply_at_the_top_ends_the_run() -> None:
+    assert move(on_ladder(FRONTIER, 1), spec=LADDER) == REFUSED_ENDING
+
+
+def test_a_private_run_has_nothing_above_its_model_on_this_mac() -> None:
+    history = on_ladder(private=True)
+    assert move(history, spec=private()) == REFUSED_ENDING
+    # The same when the run falls to the default route: the veto strikes
+    # the model above.
+    only_default = dataclasses.replace(private(), routes=(DEFAULT_ROUTE,))
+    history = on_ladder(private=True)
+    history.events[3] = dataclasses.replace(
+        history.events[3], payload={**history.events[3].payload, "route_id": "default"}
+    )
+    assert move(history, spec=only_default) == REFUSED_ENDING
+
+
+def test_a_session_private_from_an_earlier_run_has_nothing_above_either() -> None:
+    history = History().start(private=True)
+    history.answered()
+    history.start(native_id="m2", run_id="run-2")
+    history.chose(LOCAL, 0, route_id="private")
+    history.request()
+    history.reply(TextPart(text="No."), reason="refused")
+    assert move(history, spec=LADDER) == REFUSED_ENDING
+
+
+def test_an_ending_reply_ends_the_run_with_a_stop_waiting() -> None:
+    history = on_ladder()
+    assert move(history, (row(2, stop("s1")),), spec=LADDER) == REFUSED_ENDING
+
+
+def test_an_ending_reply_ends_the_run_under_other_settings() -> None:
+    other = dataclasses.replace(LADDER, config_id="d" * 64)
+    assert move(on_ladder(), spec=other) == REFUSED_ENDING
+
+
+def test_an_ending_reply_ends_the_run_at_a_limit() -> None:
+    at_limit = dataclasses.replace(LADDER, max_steps=1)
+    assert move(on_ladder(), spec=at_limit) == REFUSED_ENDING
+
+
+def test_a_run_with_no_choice_ends_on_an_ending_reply_as_before() -> None:
+    history = History().start()
+    history.request()
+    history.reply(TextPart(text="No."), reason="refused")
+    assert move(history, spec=LADDER) == REFUSED_ENDING
+
+
+def test_a_reply_older_than_the_last_choice_leads_to_nothing() -> None:
+    history = on_ladder()
+    history.chose(FRONTIER, 1, "refused")
+    assert move(history, spec=LADDER) == CallModel()
+    # The rows after it run as after a whole reply: a stop ends the run.
+    assert move(history, (row(2, stop("s1")),), spec=LADDER) == ended(
+        "cancelled", "", STOPPED_NOTICE
     )

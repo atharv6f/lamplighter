@@ -47,6 +47,7 @@ from tests.model_by_request import ModelByRequest, assistant_turns
 from tests.model_samples import PROFILE
 from tests.run_history import (
     CONFIG,
+    MODEL_NAME,
     PORTABLE,
     REVISION,
     SESSION,
@@ -117,44 +118,61 @@ def shape(event: Event) -> tuple[object, ...]:
 RUN = "id-0001"
 MESSAGE_ID = inbound_event_id("terminal", "n1")
 UNKNOWN_TEXT = "There is no tool named weather. The tools are: current_time, wait."
-ASKED = {"deadline_ms": 600_000, "model": "made-up-1", "provider": "made-up"}
+ASKED = {
+    "deadline_ms": 600_000,
+    "model_name": MODEL_NAME,
+    "model": PROFILE.model,
+    "provider": PROFILE.adapter,
+}
+# The one model of the settings, chosen at the start, with no health to ask.
+CHOSEN = {
+    "route_id": "default",
+    "model": MODEL_NAME,
+    "position": 0,
+    "reason": "start",
+    "private": False,
+    "size": None,
+    "health": {MODEL_NAME: "not_asked"},
+}
 EXPECTED: list[tuple[object, ...]] = [
     (1, "session_started", {"channel": "terminal", "conversation": SESSION},
      None, None, None, None, FIRST_AT),
     (2, "run_started",
      {"config_id": CONFIG, "portable_config_id": PORTABLE,
-      "code_revision": REVISION, "trigger": "message", "wall": WALL},
+      "code_revision": REVISION, "trigger": "message", "wall": WALL,
+      "private": False},
      RUN, None, MESSAGE_ID, None, FIRST_AT),
     (3, "user_message", {"text": QUESTION}, RUN, None, None, None, FIRST_AT),
-    (4, "model_request", ASKED, RUN, 1, None, None, FIRST_AT),
-    (5, "model_response",
+    (4, "route_decided", CHOSEN, RUN, None, None, None, FIRST_AT),
+    (5, "model_request", ASKED, RUN, 1, None, None, FIRST_AT),
+    (6, "model_response",
      reply_payload(CURRENT_TIME, WAIT, reason="tool_calls"),
-     RUN, 1, eid(4), 0, FIRST_AT),
-    (6, "tool_intent",
+     RUN, 1, eid(5), 0, FIRST_AT),
+    (7, "tool_intent",
      {"call_id": "call_1", "name": "current_time", "action_class": "read"},
-     RUN, 1, eid(5), None, FIRST_AT),
-    (7, "tool_result", {"call_id": "call_1", "text": FIRST_AT, "is_error": False},
-     RUN, 1, eid(6), 0, FIRST_AT),
-    (8, "tool_intent",
+     RUN, 1, eid(6), None, FIRST_AT),
+    (8, "tool_result", {"call_id": "call_1", "text": FIRST_AT, "is_error": False},
+     RUN, 1, eid(7), 0, FIRST_AT),
+    (9, "tool_intent",
      {"call_id": "call_2", "name": "wait", "action_class": "read"},
-     RUN, 1, eid(5), None, FIRST_AT),
-    (9, "tool_result",
+     RUN, 1, eid(6), None, FIRST_AT),
+    (10, "tool_result",
      {"call_id": "call_2", "text": "Waited 2 seconds.", "is_error": False},
-     RUN, 1, eid(8), 2_000, AFTER_WAIT),
-    (10, "model_request", ASKED, RUN, 2, None, None, AFTER_WAIT),
-    (11, "model_response", reply_payload(WEATHER, reason="tool_calls"),
-     RUN, 2, eid(10), 0, AFTER_WAIT),
-    (12, "tool_result",
+     RUN, 1, eid(9), 2_000, AFTER_WAIT),
+    (11, "model_request", ASKED, RUN, 2, None, None, AFTER_WAIT),
+    (12, "model_response", reply_payload(WEATHER, reason="tool_calls"),
+     RUN, 2, eid(11), 0, AFTER_WAIT),
+    (13, "tool_result",
      {"call_id": "call_3", "text": UNKNOWN_TEXT, "is_error": True,
       "harness": "unknown_tool"},
-     RUN, 2, eid(11), None, AFTER_WAIT),
-    (13, "model_request", ASKED, RUN, 3, None, None, AFTER_WAIT),
-    (14, "model_response", reply_payload(TextPart(text=ANSWER), reason="end"),
-     RUN, 3, eid(13), 0, AFTER_WAIT),
-    (15, "reply_ready",
+     RUN, 2, eid(12), None, AFTER_WAIT),
+    (14, "model_request", ASKED, RUN, 3, None, None, AFTER_WAIT),
+    (15, "model_response", reply_payload(TextPart(text=ANSWER), reason="end"),
+     RUN, 3, eid(14), 0, AFTER_WAIT),
+    (16, "reply_ready",
      {"text": ANSWER, "kind": "reply", "run_reason": "done", "run_detail": ""},
      RUN, 3, None, None, AFTER_WAIT),
-    (16, "run_end", {"reason": "done", "detail": ""},
+    (17, "run_end", {"reason": "done", "detail": ""},
      RUN, 3, None, None, AFTER_WAIT),
 ]  # fmt: skip
 
@@ -169,14 +187,14 @@ def test_the_plain_run_saves_exactly_these_events() -> None:
         loop = in_memory(ModelByRequest(three_steps))
         await ask(loop)
         ended = await run_turn(SESSION, SPEC, loop.deps)
-        assert ended == TurnEnd(run_id=RUN, last_seq=16, reason="done")
+        assert ended == TurnEnd(run_id=RUN, last_seq=17, reason="done")
         events = await loop.events(SESSION)
         assert [shape(event) for event in events] == EXPECTED
         assert events[2].event_id == MESSAGE_ID
         assert await loop.inbox.pending() == ()
         assert await loop.outbox.due() == (
             Outbound(
-                out_id=out_id_for(SESSION, 15),
+                out_id=out_id_for(SESSION, 16),
                 session_id=SESSION,
                 kind="reply",
                 text=ANSWER,
@@ -273,7 +291,7 @@ def test_the_same_run_twice_saves_the_same_bytes(tmp_path: Path) -> None:
 
     first = asyncio.run(one_run(tmp_path / "first"))
     second = asyncio.run(one_run(tmp_path / "second"))
-    assert len(first) == 16
+    assert len(first) == 17
     assert first == second
 
 
@@ -348,29 +366,31 @@ def test_a_failing_append_is_returned_and_the_next_call_carries_on() -> None:
         model = ModelByRequest(three_steps)
         loop = in_memory(model)
         inner = loop.log
-        failing = FailingLog(inner, failing=3)
+        failing = FailingLog(inner, failing=4)
         loop.log = failing
         await ask(loop)
         assert await run_turn(SESSION, SPEC, loop.deps) is failing.failure
-        # The third append was the first reply. Its request is saved.
+        # The fourth append was the first reply. Its request is saved.
         kept = await loop.events(SESSION)
-        assert [event.type for event in kept][-1] == "model_request"
-        assert len(kept) == 4
+        assert [event.type for event in kept][-2:] == ["route_decided", "model_request"]
+        assert len(kept) == 5
         loop.log = inner
         ended = await run_turn(SESSION, SPEC, loop.deps)
         assert isinstance(ended, TurnEnd) and ended.reason == "done"
         types = [event.type for event in await loop.events(SESSION)]
-        # The lost call counts as a step, and the model is asked again.
-        assert types[3:6] == ["model_request", "model_request", "model_response"]
+        # The lost call counts as a step, and the model is asked again. The
+        # run keeps its choice, so no second one is saved.
+        assert types[4:7] == ["model_request", "model_request", "model_response"]
+        assert types.count("route_decided") == 1
         assert len(model.requests) == 4
         assert types.count("run_end") == 1
 
     asyncio.run(scenario())
 
 
-# The plain run makes 14 appends. A failure at each one is returned, and
+# The plain run makes 15 appends. A failure at each one is returned, and
 # the next call ends the run with every call answered once.
-@pytest.mark.parametrize("failing", range(1, 15))
+@pytest.mark.parametrize("failing", range(1, 16))
 def test_a_failure_at_any_append_is_carried_on_from(failing: int) -> None:
     async def scenario() -> None:
         loop = in_memory(ModelByRequest(three_steps))
@@ -509,7 +529,7 @@ def test_a_run_is_not_closed_before_its_reply_is_in_the_outbox() -> None:
         assert events[-1].type == "reply_ready"
         loop.outbox = inner
         ended = await run_turn(SESSION, SPEC, loop.deps)
-        assert ended == TurnEnd(run_id=RUN, last_seq=16, reason="done")
+        assert ended == TurnEnd(run_id=RUN, last_seq=17, reason="done")
         assert [out.text for out in await loop.due()] == [ANSWER]
 
     asyncio.run(scenario())
