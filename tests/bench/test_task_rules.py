@@ -226,3 +226,33 @@ def test_an_instruction_that_names_app() -> None:
 def test_a_dockerignore_that_is_not_the_one_line() -> None:
     faults = _faults(environment___dot_dockerignore=".DS_Store\n*.pyc\n")
     assert faults == ("environment/.dockerignore is not the one line .DS_Store.",)
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "/opt/reports/latest.txt",
+        "../../../outside.txt",
+        "a/../../../../x",
+        "./../../../x",
+    ],
+)
+def test_a_link_that_leads_out_of_the_task_folder(target: str) -> None:
+    link = TaskFile("environment/files/latest.txt", target.encode(), False, True)
+    faults = task_faults(NAME, [*_files(GOOD), link])
+    assert faults == (
+        "environment/files/latest.txt is a link that leads out of the task's folder.",
+    )
+
+
+@pytest.mark.parametrize("target", ["settings.ini", "../files/./settings.ini", "../.."])
+def test_a_link_that_stays_in_the_task_folder_is_allowed(target: str) -> None:
+    link = TaskFile("environment/files/latest.txt", target.encode(), False, True)
+    assert task_faults(NAME, [*_files(GOOD), link]) == ()
+
+
+def test_a_file_whose_text_looks_like_a_path_out_is_not_a_link() -> None:
+    plain = TaskFile(
+        "environment/files/where.txt", b"/opt/reports/latest.txt", False, False
+    )
+    assert task_faults(NAME, [*_files(GOOD), plain]) == ()

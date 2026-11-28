@@ -52,6 +52,7 @@ def task_faults(name: str, files: Iterable[TaskFile]) -> tuple[str, ...]:
     faults.extend(_check_faults(text["tests/test.sh"], by_path))
     faults.extend(_installer_faults(text))
     faults.extend(_host_faults(by_path.values()))
+    faults.extend(_link_faults(by_path.values()))
     if "/app" in text["instruction.md"]:
         faults.append(
             "instruction.md names /app: it names paths inside the work folder."
@@ -176,6 +177,30 @@ def _installer_faults(text: Mapping[str, str]) -> list[str]:
         for path in sorted(checked)
         if (found := _INSTALLER.search(text[path])) is not None
     ]
+
+
+def _link_faults(files: Iterable[TaskFile]) -> list[str]:
+    # Harbor 0.27.0 leaves a task with such a link out of a job, without a
+    # word, so a task that needs one makes it when its image is built.
+    return [
+        f"{f.path} is a link that leads out of the task's folder."
+        for f in sorted(files, key=lambda f: f.path)
+        if f.link and _leads_out(f.path, f.data.decode(errors="replace"))
+    ]
+
+
+def _leads_out(path: str, target: str) -> bool:
+    if target.startswith("/"):
+        return True
+    place = path.split("/")[:-1]
+    for part in target.split("/"):
+        if part == "..":
+            if not place:
+                return True
+            place.pop()
+        elif part not in ("", "."):
+            place.append(part)
+    return False
 
 
 def _host_faults(files: Iterable[TaskFile]) -> list[str]:
