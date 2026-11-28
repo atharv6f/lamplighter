@@ -123,7 +123,7 @@ def test_a_check_that_never_ends_is_a_fail(tmp_path: Path) -> None:
 def test_the_agents_container_has_no_network(tmp_path: Path) -> None:
     facts = trial(tmp_path, "ListsTheNetwork")
     lines = tool_texts(facts)["n"].splitlines()
-    assert lines[1] == "lo"
+    assert [line for line in lines if line.startswith("up ")] == ["up lo"]
     assert lines[-1] != "connected=0" and lines[-1].startswith("connected=")
 
 
