@@ -30,6 +30,9 @@ from lamplighter.bench.run_set import (
     run_set,
 )
 from lamplighter.bench.sign_flip import SignCounts, sign_counts
+from lamplighter.bench.split import DEV_PLACES, Split, split
+from lamplighter.bench.task_rules import GROUPS, PINNED_IMAGE, REQUIRED, task_faults
+from lamplighter.bench.task_set import TaskFile, task_set_hash
 from lamplighter.bench.trial_record import (
     BoundWord,
     InfraReason,
@@ -42,6 +45,15 @@ from lamplighter.bench.trial_record import (
 )
 
 __all__ = [
+    "DEV_PLACES",
+    "GROUPS",
+    "PINNED_IMAGE",
+    "REQUIRED",
+    "Split",
+    "TaskFile",
+    "split",
+    "task_faults",
+    "task_set_hash",
     "COST_GUARD",
     "HARNESS",
     "MOST_TASKS",
