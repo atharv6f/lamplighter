@@ -406,6 +406,8 @@ def test_a_failure_at_any_append_is_carried_on_from(failing: int) -> None:
         results = [str(e.payload["call_id"]) for e in events if e.type == "tool_result"]
         assert sorted(results) == ["call_1", "call_2", "call_3"]
         assert [e.type for e in events].count("run_end") == 1
+        # Lost before or after it, the choice is saved once and kept.
+        assert [e.type for e in events].count("route_decided") == 1
         assert await loop.inbox.pending() == ()
         assert len(await loop.due()) == 1
 

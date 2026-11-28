@@ -163,6 +163,22 @@ def test_a_failed_call_moves_the_run_up() -> None:
         assert isinstance(ended, TurnEnd) and ended.reason == "done"
         assert await ladder.reasons() == ["start", "model_failed"]
         assert len(ladder.frontier.requests) == 1
+        events = await ladder.events()
+        assert [e.type for e in events] == [
+            "session_started",
+            "run_started",
+            "user_message",
+            "route_decided",
+            "model_request",
+            "model_response",
+            "route_decided",
+            "model_request",
+            "model_response",
+            "reply_ready",
+            "run_end",
+        ]
+        asked = [e.payload["model_name"] for e in events if e.type == "model_request"]
+        assert asked == [LOCAL, FRONTIER]
 
     asyncio.run(scenario())
 
@@ -236,6 +252,8 @@ def test_with_a_stop_waiting_a_failed_reply_ends_the_run_as_it_did_before() -> N
         assert isinstance(ended, TurnEnd) and ended.reason == "failed"
         assert await ladder.end() == ("failed", "model_invalid_input")
         assert ladder.frontier.requests == []
+        assert await ladder.reasons() == ["start"]
+        assert await ladder.loop.pending() == ()
 
     asyncio.run(scenario())
 
@@ -341,5 +359,24 @@ def test_an_ordinary_run_with_no_model_up_says_so_and_calls_nothing() -> None:
         assert await ladder.end() == ("failed", "no_model")
         assert ladder.local.requests == []
         assert await ladder.said() == [no_model_notice((LOCAL,))]
+
+    asyncio.run(scenario())
+
+
+def test_a_later_run_of_a_private_session_stays_on_this_mac() -> None:
+    async def scenario() -> None:
+        local = SteeredHealth()
+        ladder = Ladder(in_order(DONE, DONE), in_order(DONE), {LOCAL: local})
+        first = await ladder.ask(private())
+        assert isinstance(first, TurnEnd) and first.reason == "done"
+        local.answer = DOWN
+        accepted = await ladder.loop.inbox.accept(inbound("n2", "Again."))
+        assert not isinstance(accepted, Failure)
+        second = await ladder.run(LADDER)
+        assert isinstance(second, TurnEnd) and second.reason == "failed"
+        assert await ladder.end() == ("failed", "no_model")
+        assert ladder.frontier.requests == []
+        said = await ladder.said()
+        assert said[-1] == private_no_model_notice((LOCAL,))
 
     asyncio.run(scenario())
