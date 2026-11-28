@@ -14,6 +14,8 @@ The agent loop and a terminal chat are built. The loop asks the model, runs the 
 
 Seven tools are built in. `read_file`, `write_file` and `edit_file` work on files in one folder, the work folder. `search_files` searches it, `shell` runs one command line in it, `web_fetch` reads a page from a public web address, and `read_output` reads the rest of a result that was too long to give whole. A change to a file goes through the action ledger, so after a kill the agent checks whether it happened and never makes it twice. Commands run inside macOS's sandbox: they can write only in the work folder and a scratch folder, cannot read your home folder or the store, and have no network.
 
+A bench measures the harness. Each task runs in a Docker container with no network, the agent's commands run in that container, and a check in a second container grades what the agent left. A gate compares two configs on the same tasks with an exact paired test and a rule fixed before any trial, and every plan, run set and decision goes into a ledger that only grows.
+
 ## Layout
 
 - `src/lamplighter/ports/`: the interfaces the core calls.
@@ -90,6 +92,28 @@ uv run pytest -m "sandbox and not crash"
 ```
 
 They try each known way out of the sandbox and check what must still work inside it. CI runs them on a macOS runner.
+
+## Bench
+
+The bench needs Docker. It runs [Harbor](https://pypi.org/project/harbor/) 0.27.0, pinned with its own lock in `bench/harbor/`, and the harness itself on this machine. Each command the agent runs goes into the task's container, as your user, with no network. Job folders and the ledger go in `~/lamplighter-bench/`, as `bench/bench.toml` says.
+
+```
+uv run lamplighter bench tasks                                  # list and check the tasks and the split
+uv run lamplighter bench check                                  # the reference solution must pass, doing nothing must fail
+uv run lamplighter bench plan NAME --candidate FILE             # plan an experiment: this settings file against FILE
+uv run --env-file .env lamplighter bench run --experiment NAME  # run both sides, then the gate
+uv run --env-file .env lamplighter bench run NAME               # one run set on the dev tasks, outside any experiment
+uv run lamplighter bench ledger                                 # one line per row; --experiment NAME for its rows in full
+uv run lamplighter bench show RUN_SET TASK                      # one trial's transcript
+```
+
+A plan is made on the held-out tasks unless it says `--split dev`, and only a planned experiment runs them. `plan` and `run --experiment` need a checkout with every change committed, so the code an experiment names can be found again. A run that was cut off is carried on by the same command, and a run set stops starting model calls at 30 dollars.
+
+The tests that use Docker are marked `container`, and CI runs them on Linux:
+
+```
+uv run pytest -q -m container
+```
 
 ## Live tests
 

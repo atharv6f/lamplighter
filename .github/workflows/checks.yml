@@ -32,3 +32,15 @@ jobs:
       - run: $UV_PYTHON -c "import sqlite3; print(sqlite3.sqlite_version)"
       - run: uv sync --locked
       - run: uv run pytest -q -m "sandbox and not crash"
+
+  # The tests that run commands in the task's container and whole trials in
+  # Harbor, with Docker and no model, and the type check of Harbor's shim.
+  # Linux, because the hosted Macs have no Docker.
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+      - run: uv sync --locked
+      - run: uv run pytest -q -m container
+      - run: uv run --project bench/harbor --frozen pyright -p bench/harbor

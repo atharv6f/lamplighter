@@ -25,6 +25,10 @@ dev = [
     "trustme>=1.2.1",
 ]
 
+[tool.ruff]
+# A task's files are data for the bench, and some are broken on purpose.
+extend-exclude = ["bench/tasks"]
+
 [tool.ruff.lint]
 # E, F, UP, B, SIM and I are the set Ruff's own docs suggest as a start.
 # C90 caps how tangled one function may get. D100, D101 and D103 ask for a
@@ -83,3 +87,23 @@ forbidden_modules = ["opentelemetry", "google"]
 ignore_imports = [
     "lamplighter.adapters.phoenix.otlp -> opentelemetry",
 ]
+
+[[tool.importlinter.contracts]]
+name = "core does not import the bench"
+type = "forbidden"
+source_modules = ["lamplighter.core"]
+forbidden_modules = ["lamplighter.bench"]
+
+[[tool.importlinter.contracts]]
+name = "the bench's rules take plain values and import no other part"
+type = "forbidden"
+source_modules = ["lamplighter.bench"]
+forbidden_modules = ["lamplighter.adapters", "lamplighter.app", "lamplighter.core"]
+
+# Harbor is not installed in the harness's environment. Only the shim in
+# bench/harbor imports it.
+[[tool.importlinter.contracts]]
+name = "nothing in the harness imports Harbor"
+type = "forbidden"
+source_modules = ["lamplighter"]
+forbidden_modules = ["harbor"]
