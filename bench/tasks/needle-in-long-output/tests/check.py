@@ -19,5 +19,5 @@ def text(path: str) -> str:
     return found.read_text(encoding="utf-8")
 
 
-if text("answer.txt").strip() != "SN-48213-QX":
+if text("answer.txt").strip() != "SN-92228-YV":
     fail("answer.txt does not hold the serial number")
