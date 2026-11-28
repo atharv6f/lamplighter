@@ -26,6 +26,7 @@ from lamplighter.app.bench_parts import (
     revision_fault,
     task_view,
 )
+from lamplighter.app.config import Config
 from lamplighter.bench import (
     HARNESS,
     GateDecision,
@@ -200,7 +201,8 @@ def _loose_job(
     if harness != HARNESS:
         # A baseline installs itself, so its container has a network.
         agent = RunnerAgentSpec("runner", harness, model.model, BASELINES[harness])
-        return Job(name, chosen.tasks, attempts, _pace(parts), True, agent), planned
+        pace = _pace(parts, settings.config)
+        return Job(name, chosen.tasks, attempts, pace, True, agent), planned
     copy = _settings_copy(parts, name, settings)
     if isinstance(copy, str):
         return copy
@@ -291,6 +293,7 @@ async def _whole(
     # that code before the job and after it.
     if parts.revision() != planned.code_revision:
         return parts.refuse(CHANGED_DURING)
+    print(f"Trials at once: {job.concurrent_trials}.", file=parts.out)
     failed = await parts.jobs.run(job)
     if failed is not None:
         return parts.refuse(failed.message)
@@ -423,11 +426,17 @@ def _harness_job(
         code_revision=revision,
         run_as=parts.user,
     )
-    return Job(name, tasks, attempts, _pace(parts), False, agent)
+    return Job(name, tasks, attempts, _pace(parts, copy.config), False, agent)
 
 
-def _pace(parts: BenchParts) -> int:
-    return parts.settings.concurrent_trials
+def _pace(parts: BenchParts, config: Config) -> int:
+    # A server on this Mac runs only its own number of requests at once and
+    # queues the rest, and a trial waiting there spends its seconds idle.
+    # The settings refuse a model no route names, so each one is on a ladder.
+    local = [
+        e.profile.concurrent_requests for e in config.models if e.local is not None
+    ]
+    return min([parts.settings.concurrent_trials, *local])
 
 
 def _not_whole(parts: BenchParts, found: NotWhole, planned: RunSetPlan) -> int:

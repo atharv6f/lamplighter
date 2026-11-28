@@ -2,7 +2,7 @@
 
 import asyncio
 import dataclasses
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pytest
@@ -33,6 +33,8 @@ from lamplighter.ports import (
     from_plain,
 )
 from tests.bench_kit import USER, Bench, git, harness_record
+from tests.settings_text import with_local
+from tests.test_bench_trial import quick_settings
 
 NAME = "made-up"
 WHOLE = [
@@ -534,3 +536,51 @@ def test_a_checkout_that_changed_before_the_job_starts_no_job(bench: Bench) -> N
     assert asyncio.run(loose) == 1
     assert bench.said() == CHANGED_DURING + "\n"
     assert bench.jobs.jobs == []
+
+
+# Trials at once, against the servers on this Mac.
+
+
+def _local_in_routes(text: str, requests: str) -> str:
+    return with_local(text).replace(
+        "concurrent_requests = 2", f"concurrent_requests = {requests}"
+    )
+
+
+def _frontier_only() -> str:
+    return quick_settings()
+
+
+def _local_of_two() -> str:
+    return _local_in_routes(quick_settings(), "2")
+
+
+def _local_of_eight() -> str:
+    return _local_in_routes(quick_settings(), "8")
+
+
+@pytest.mark.parametrize(
+    ("settings", "at_once"),
+    [
+        (_frontier_only, 4),
+        (_local_of_two, 2),
+        (_local_of_eight, 4),
+    ],
+)
+def test_no_more_trials_run_at_once_than_a_local_model_on_a_route_takes(
+    bench: Bench, settings: Callable[[], str], at_once: int
+) -> None:
+    bench.baseline.write_text(settings())
+    assert _loose(bench) == 0
+    (job,) = bench.jobs.jobs
+    assert job.concurrent_trials == at_once
+    assert f"Trials at once: {at_once}.\n" in bench.out.getvalue()
+    assert _run_set_rows(bench)[0].body.concurrent_trials == at_once
+
+
+def test_an_experiment_side_runs_at_its_own_settings_pace(bench: Bench) -> None:
+    bench.candidate.write_text(_local_in_routes(quick_settings(), "1"))
+    assert _plan(bench) == 0
+    assert _experiment(bench) == 0
+    paces = [job.concurrent_trials for job in bench.jobs.jobs]
+    assert paces == [4, 1]
