@@ -57,3 +57,24 @@ def test_the_planted_worse_config_differs_only_in_max_steps() -> None:
     run = dataclasses.replace(worse.run, max_steps=baseline.run.max_steps)
     assert dataclasses.replace(worse, run=run) == baseline
     assert settings_portable_id(worse) != settings_portable_id(baseline)
+
+
+def test_the_local_configs_differ_only_in_their_models_and_route() -> None:
+    baseline = load_config(REPO_ROOT / "lamplighter.toml")
+    only = load_config(BENCH / "configs" / "local_only.toml")
+    first = load_config(BENCH / "configs" / "local_first.toml")
+    (local,) = only.models
+    assert local.name == "local" and local.local is not None
+    assert local.profile.stays_on_mac
+    assert first.models == (baseline.default_model(), local)
+    assert [(r.id, r.when, r.models) for r in only.routes] == [
+        ("default", "always", ("local",))
+    ]
+    assert [(r.id, r.when, r.models) for r in first.routes] == [
+        ("default", "always", ("local", "frontier"))
+    ]
+    for config in (only, first):
+        same = dataclasses.replace(
+            config, models=baseline.models, routes=baseline.routes
+        )
+        assert same == baseline

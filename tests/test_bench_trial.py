@@ -241,7 +241,11 @@ def quick_settings(**values: str) -> str:
 
     No model retries, so that an outage ends at once.
     """
-    text = SETTINGS.read_text()
+    return fitted(SETTINGS.read_text(), **values)
+
+
+def fitted(text: str, **values: str) -> str:
+    """Give the settings text fit to the scripted model's profile, as above."""
     fit = {"model_retries": "0", "cache_hints": "0", "model_max_output": "1_000"}
     for name, value in {**fit, **values}.items():
         old = next(line for line in text.splitlines() if line.startswith(f"{name} ="))
@@ -561,3 +565,26 @@ def test_the_prompt_front_is_that_of_a_chat_on_the_same_settings_file(
     trial_front, chat_front = in_trial.requests[0], in_chat.requests[0]
     assert canonical_json(trial_front.system) == canonical_json(chat_front.system)
     assert canonical_json(trial_front.tools) == canonical_json(chat_front.tools)
+
+
+def test_a_trial_of_the_local_first_config_moves_up_and_names_both_models(
+    tmp_path: Path,
+) -> None:
+    text = (SETTINGS.parent / "bench" / "configs" / "local_first.toml").read_text()
+    trial = Trial(tmp_path, fitted(text))
+    # The local model fails, and the frontier one answers.
+    local = playing(ScriptedBreak((), OUTAGE))
+    frontier = playing(DONE)
+
+    async def close() -> None:
+        pass
+
+    def models(config: Config) -> ModelSet:
+        assert [entry.name for entry in config.models] == ["frontier", "local"]
+        return ModelSet({"local": local, "frontier": frontier}, {}, close)
+
+    parts = dataclasses.replace(trial.parts(playing()), models=models)
+    record = asyncio.run(run_trial(parts, trial.request()))
+    assert (len(local.requests), len(frontier.requests)) == (1, 1)
+    assert (record.models_called, record.escalated) == (("local", "frontier"), True)
+    assert (record.run_reason, record.gradable) == ("done", True)

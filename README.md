@@ -14,6 +14,8 @@ The agent loop and a terminal chat are built. The loop asks the model, runs the 
 
 Seven tools are built in. `read_file`, `write_file` and `edit_file` work on files in one folder, the work folder. `search_files` searches it, `shell` runs one command line in it, `web_fetch` reads a page from a public web address, and `read_output` reads the rest of a result that was too long to give whole. A change to a file goes through the action ledger, so after a kill the agent checks whether it happened and never makes it twice. Commands run inside macOS's sandbox: they can write only in the work folder and a scratch folder, cannot read your home folder or the store, and have no network.
 
+Each run picks its model from a rule table in the settings. A model can be a frontier model on Anthropic's API or one served on this Mac, on 127.0.0.1, through the chat completions shape. A run starts on the first model of its route's ladder that is up and fits, and moves up when that model struggles. A private chat uses only models on this Mac and never the frontier. A bake-off picks the server and model to run on this Mac, by a rule written before any candidate is measured.
+
 A bench measures the harness. Each task runs in a Docker container with no network, the agent's commands run in that container, and a check in a second container grades what the agent left. A gate compares two configs on the same tasks with an exact paired test and a rule fixed before any trial, and every plan, run set and decision goes into a ledger that only grows.
 
 ## Layout
@@ -35,14 +37,17 @@ make check
 
 `make check` runs the formatter check, lint, type check, import rule and tests. The code rules are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
-`lamplighter.toml` holds the settings: the model, its limits and its prices, where the saved state lives, how one run behaves, and where the tools work. No secret goes in it.
+`lamplighter.toml` holds the settings: the models, their limits and their prices, the routes that pick a run's model, where the saved state lives, how one run behaves, and where the tools work. No secret goes in it.
 
 ## Chat
 
 ```
 uv run --env-file .env lamplighter chat                    # start a new session and print its id
 uv run --env-file .env lamplighter chat --session SESSION  # carry on a session
+uv run --env-file .env lamplighter chat --private          # a session that stays on this Mac
 ```
+
+`--private` makes the session private from then on: its runs use only models on this Mac, and `web_fetch` is off. If none is answering, the run ends at once and says that nothing was sent off this Mac. Settings with no model on this Mac cannot run a private session.
 
 Each line you type is one message. One line is printed before each model call and each tool call, then the reply. Type `stop`, or press Ctrl-C, to stop a run. A second Ctrl-C during the same run leaves at once with exit code 130, and the next start carries on from what is saved. Ctrl-C or Ctrl-D at the prompt leaves.
 
@@ -115,6 +120,39 @@ The tests that use Docker are marked `container`, and CI runs them on Linux:
 
 ```
 uv run pytest -q -m container
+```
+
+## Models on this Mac
+
+A model on this Mac is a `[[models]]` entry with `adapter = "openai_chat"`, an address on 127.0.0.1, and the server, its version and the hash of its weights. A `[[routes]]` table lists the models each kind of run may use, weakest first; the last route holds always. `lamplighter models` lists each entry and whether it is up now.
+
+Start an entry's server in the foreground with its weights:
+
+```
+scripts/local_model.sh lamplighter.toml local ~/lamplighter-models/weights/WEIGHTS
+```
+
+It refuses weights whose hash is not the entry's, starts the server with none of your shell's variables, downloads and usage reports off, and only on 127.0.0.1. Each server's program is installed under the entry's `server_dir`, in `~/lamplighter-models/`.
+
+The bake-off picks the server and model. Its rows go in the bench's ledger, and the requests it measures with, the capture set, are your own messages: they stay in `~/lamplighter-bench/captures/`, go only to servers on this Mac, and never into the repo.
+
+```
+uv run lamplighter models bakeoff capture --settings FILE --count-with FILE  # build the capture set
+uv run lamplighter models bakeoff rule                                       # fix the rule before any candidate
+uv run lamplighter models bakeoff run --settings FILE --model NAME --notes NOTES  # measure one candidate
+uv run lamplighter models bakeoff soak --settings FILE --model NAME          # one request a minute for a day
+uv run lamplighter models bakeoff choose                                     # apply the rule, write the choice
+uv run lamplighter models bakeoff table                                      # print every candidate under the rule
+```
+
+`--count-with` is a settings file with one `llama_cpp` entry, for an exact count of each request; give one for each candidate's model. The notes file is TOML you write for each candidate: `weights_source`, `quant`, `added_bytes`, `adapter_per_request` (`yes`, `no` or `at_start`) with `adapter_evidence`, and one `[[hard]]` table with `name`, `passed` and `evidence` for each of `broken_call_visible`, `prompt_over_window_caught`, `loopback_only` and `pinned`. The soak keeps the Mac awake with `caffeinate`, and a soak cut short is written as not whole by the next one.
+
+`bench/configs/local_only.toml` is `lamplighter.toml` with only the model on this Mac, and `bench/configs/local_first.toml` puts it first on the ladder below the frontier model. `bench run` runs no more trials at once than a model on this Mac takes, and a reply the adapter refuses, such as one with tool call markup in its text, counts as the agent's fail.
+
+Some tests run programs only macOS has, such as `lsof` and `caffeinate`, so `make check` leaves them out:
+
+```
+uv run pytest -m mac
 ```
 
 ## Live tests
